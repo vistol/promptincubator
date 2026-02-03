@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Pipeline - Incubator Demo</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      color: #e4e4e4;
+    }
+    .header {
+      background: rgba(0,0,0,0.3);
+      padding: 20px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .header h1 { font-size: 24px; margin-bottom: 5px; }
+    .header p { color: #888; font-size: 14px; }
+    .container { padding: 20px; max-width: 1400px; margin: 0 auto; }
+
+    /* Filter Tabs */
+    .filter-tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .filter-tab {
+      padding: 8px 16px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 20px;
+      cursor: pointer;
+      transition: all 0.2s;
+      color: #888;
+    }
+    .filter-tab:hover { background: rgba(255,255,255,0.1); }
+    .filter-tab.active {
+      background: rgba(99, 102, 241, 0.2);
+      border-color: #6366f1;
+      color: #a5b4fc;
+    }
+
+    /* Eggs Grid */
+    .eggs-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+      gap: 20px;
+    }
+
+    /* Egg Card */
+    .egg-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .egg-header {
+      padding: 15px;
+      background: rgba(0,0,0,0.2);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .egg-title { display: flex; align-items: center; gap: 10px; }
+    .egg-icon { font-size: 24px; }
+    .egg-name { font-weight: 600; }
+    .egg-status {
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .status-incubating { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
+    .status-completed { background: rgba(99, 102, 241, 0.2); color: #a5b4fc; }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .tab {
+      padding: 12px 20px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+      color: #888;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .tab:hover { color: #fff; background: rgba(255,255,255,0.05); }
+    .tab.active {
+      color: #a5b4fc;
+      border-bottom-color: #6366f1;
+      background: rgba(99, 102, 241, 0.1);
+    }
+
+    /* Tab Content */
+    .tab-content { padding: 15px; min-height: 300px; }
+
+    /* Event Log */
+    .log-controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 15px;
+      flex-wrap: wrap;
+    }
+    .log-search {
+      flex: 1;
+      min-width: 200px;
+      padding: 8px 12px;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 14px;
+    }
+    .log-search::placeholder { color: #666; }
+    .view-mode {
+      display: flex;
+      background: rgba(0,0,0,0.3);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .view-btn {
+      padding: 8px 12px;
+      background: none;
+      border: none;
+      color: #888;
+      cursor: pointer;
+    }
+    .view-btn.active { background: rgba(99, 102, 241, 0.3); color: #a5b4fc; }
+
+    /* Event Rows */
+    .events-list {
+      max-height: 400px;
+      overflow-y: auto;
+      background: rgba(0,0,0,0.2);
+      border-radius: 8px;
+    }
+    .event-row {
+      padding: 10px 15px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      transition: background 0.2s;
+    }
+    .event-row:hover { background: rgba(255,255,255,0.03); }
+    .event-row.highlighted { background: rgba(34, 197, 94, 0.1); }
+    .event-time { color: #666; font-size: 12px; font-family: monospace; min-width: 80px; }
+    .event-icon { font-size: 16px; }
+    .event-content { flex: 1; }
+    .event-title { font-size: 14px; margin-bottom: 2px; }
+    .event-detail { font-size: 12px; color: #888; }
+    .event-level {
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+    .level-info { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+    .level-success { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
+    .level-warning { background: rgba(234, 179, 8, 0.2); color: #facc15; }
+    .level-error { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+
+    /* Trade Card in Log */
+    .trade-card {
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+      border-radius: 8px;
+      padding: 12px;
+      margin-top: 8px;
+    }
+    .trade-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
+    .trade-symbol { font-weight: 600; font-size: 16px; }
+    .trade-direction { padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+    .direction-long { background: rgba(34, 197, 94, 0.3); color: #4ade80; }
+    .direction-short { background: rgba(239, 68, 68, 0.3); color: #f87171; }
+    .trade-details { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-size: 12px; }
+    .trade-detail label { color: #666; display: block; }
+    .trade-detail value { color: #fff; }
+
+    /* Trades Tab */
+    .trades-list { display: flex; flex-direction: column; gap: 10px; }
+
+    /* Config Tab */
+    .config-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+    .config-item { background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; }
+    .config-label { color: #888; font-size: 12px; margin-bottom: 4px; }
+    .config-value { font-size: 14px; }
+
+    /* AI Tab */
+    .ai-response {
+      background: rgba(0,0,0,0.2);
+      border-radius: 8px;
+      padding: 15px;
+      font-family: monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    /* Live indicator */
+    .live-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #4ade80;
+    }
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      background: #4ade80;
+      border-radius: 50%;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // Demo data - simulated eggs with events
+    const DEMO_EGGS = [
+      {
+        id: 'egg-001',
+        name: 'BTC Momentum',
+        strategy: 'Momentum Breakout',
+        status: 'incubating',
+        createdAt: new Date(Date.now() - 120000),
+        config: {
+          symbol: 'BTCUSDT',
+          timeframe: '4h',
+          riskPercent: 2,
+          maxLeverage: 10
+        },
+        trades: [
+          { symbol: 'BTCUSDT', direction: 'LONG', entry: 97250, sl: 96500, tp: 99000, leverage: 5, ipe: 8.5 }
+        ],
+        events: generateEvents('egg-001', true)
+      },
+      {
+        id: 'egg-002',
+        name: 'ETH Reversal',
+        strategy: 'Mean Reversion',
+        status: 'completed',
+        createdAt: new Date(Date.now() - 3600000),
+        config: {
+          symbol: 'ETHUSDT',
+          timeframe: '1h',
+          riskPercent: 1.5,
+          maxLeverage: 8
+        },
+        trades: [
+          { symbol: 'ETHUSDT', direction: 'SHORT', entry: 3150, sl: 3220, tp: 3050, leverage: 4, ipe: 7.2 },
+          { symbol: 'ETHUSDT', direction: 'LONG', entry: 3080, sl: 3020, tp: 3180, leverage: 3, ipe: 6.8 }
+        ],
+        events: generateEvents('egg-002', false)
+      },
+      {
+        id: 'egg-003',
+        name: 'SOL Scalper',
+        strategy: 'Quick Scalp',
+        status: 'incubating',
+        createdAt: new Date(Date.now() - 60000),
+        config: {
+          symbol: 'SOLUSDT',
+          timeframe: '15m',
+          riskPercent: 1,
+          maxLeverage: 15
+        },
+        trades: [],
+        events: generateEvents('egg-003', true, true)
+      }
+    ];
+
+    function generateEvents(eggId, isLive, inProgress = false) {
+      const baseTime = Date.now() - (isLive ? 30000 : 3600000);
+      const events = [
+        { id: 1, type: 'EXECUTION_STARTED', timestamp: baseTime, level: 'info', icon: '▶', title: 'Pipeline Started', detail: 'Initializing trade generation pipeline' },
+        { id: 2, type: 'STEP_STARTED', timestamp: baseTime + 100, level: 'info', icon: '📊', title: 'Step: Fetch Prices', detail: 'Fetching current market data' },
+        { id: 3, type: 'PRICES_FETCHED', timestamp: baseTime + 1500, level: 'success', icon: '✓', title: 'Prices Retrieved', detail: 'BTC: $97,245 | ETH: $3,142 | SOL: $198.5' },
+        { id: 4, type: 'STEP_STARTED', timestamp: baseTime + 1600, level: 'info', icon: '📈', title: 'Step: Technical Analysis', detail: 'Running indicators and pattern detection' },
+        { id: 5, type: 'ANALYSIS_COMPLETE', timestamp: baseTime + 3000, level: 'success', icon: '✓', title: 'Analysis Complete', detail: 'RSI: 62 | MACD: Bullish | Trend: Upward' },
+        { id: 6, type: 'STEP_STARTED', timestamp: baseTime + 3100, level: 'info', icon: '🤖', title: 'Step: AI Generation', detail: 'Sending context to Claude AI' },
+        { id: 7, type: 'AI_STREAMING', timestamp: baseTime + 3500, level: 'info', icon: '💭', title: 'AI Thinking...', detail: 'Analyzing market conditions and generating trades' },
+      ];
+
+      if (!inProgress) {
+        events.push(
+          { id: 8, type: 'AI_CHUNK', timestamp: baseTime + 5000, level: 'info', icon: '📝', title: 'AI Response Chunk', detail: 'Based on the current momentum...' },
+          { id: 9, type: 'TRADE_PARSED', timestamp: baseTime + 7000, level: 'success', icon: '📈', title: 'Trade Detected', detail: 'LONG BTCUSDT @ 97,250', highlighted: true,
+            trade: { symbol: 'BTCUSDT', direction: 'LONG', entry: 97250, sl: 96500, tp: 99000, leverage: 5 }
+          },
+          { id: 10, type: 'STEP_STARTED', timestamp: baseTime + 7100, level: 'info', icon: '✅', title: 'Step: Validation', detail: 'Running trade validators' },
+          { id: 11, type: 'VALIDATION_PASSED', timestamp: baseTime + 7500, level: 'success', icon: '✓', title: 'Validation Passed', detail: 'Risk/Reward: 2.3 | IPE Score: 8.5' },
+          { id: 12, type: 'STEP_STARTED', timestamp: baseTime + 7600, level: 'info', icon: '🔍', title: 'Step: GlassBox', detail: 'Building transparency report' },
+          { id: 13, type: 'GLASSBOX_COMPLETE', timestamp: baseTime + 8000, level: 'success', icon: '📋', title: 'GlassBox Ready', detail: '5 reasoning points | 3 criteria matched' }
+        );
+
+        if (!isLive) {
+          events.push(
+            { id: 14, type: 'EXECUTION_COMPLETED', timestamp: baseTime + 8500, level: 'success', icon: '🎉', title: 'Pipeline Complete', detail: '1 trade generated in 8.5s' }
+          );
+        }
+      }
+
+      return events;
+    }
+
+    // Event Row Component
+    function EventRow({ event, viewMode }) {
+      const levelClass = `level-${event.level}`;
+
+      return (
+        <div className={`event-row ${event.highlighted ? 'highlighted' : ''}`}>
+          <span className="event-time">
+            {new Date(event.timestamp).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          </span>
+          <span className="event-icon">{event.icon}</span>
+          <div className="event-content">
+            <div className="event-title">{event.title}</div>
+            {viewMode !== 'compact' && <div className="event-detail">{event.detail}</div>}
+            {event.trade && viewMode === 'expanded' && (
+              <div className="trade-card">
+                <div className="trade-header">
+                  <span className="trade-symbol">{event.trade.symbol}</span>
+                  <span className={`trade-direction direction-${event.trade.direction.toLowerCase()}`}>
+                    {event.trade.direction}
+                  </span>
+                </div>
+                <div className="trade-details">
+                  <div className="trade-detail">
+                    <label>Entry</label>
+                    <value>${event.trade.entry.toLocaleString()}</value>
+                  </div>
+                  <div className="trade-detail">
+                    <label>Stop Loss</label>
+                    <value>${event.trade.sl.toLocaleString()}</value>
+                  </div>
+                  <div className="trade-detail">
+                    <label>Take Profit</label>
+                    <value>${event.trade.tp.toLocaleString()}</value>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+          <span className={`event-level ${levelClass}`}>{event.level}</span>
+        </div>
+      );
+    }
+
+    // Event Log Component
+    function EventLog({ events, isLive }) {
+      const [viewMode, setViewMode] = useState('normal');
+      const [searchQuery, setSearchQuery] = useState('');
+      const [autoScroll, setAutoScroll] = useState(true);
+      const listRef = useRef(null);
+
+      const filteredEvents = events.filter(e =>
+        e.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        e.detail.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+
+      useEffect(() => {
+        if (autoScroll && listRef.current) {
+          listRef.current.scrollTop = listRef.current.scrollHeight;
+        }
+      }, [events, autoScroll]);
+
+      return (
+        <div>
+          <div className="log-controls">
+            <input
+              type="text"
+              className="log-search"
+              placeholder="Buscar eventos..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+            />
+            <div className="view-mode">
+              {['compact', 'normal', 'expanded'].map(mode => (
+                <button
+                  key={mode}
+                  className={`view-btn ${viewMode === mode ? 'active' : ''}`}
+                  onClick={() => setViewMode(mode)}
+                >
+                  {mode === 'compact' ? '▤' : mode === 'normal' ? '▦' : '▣'}
+                </button>
+              ))}
+            </div>
+            {isLive && (
+              <div className="live-indicator">
+                <span className="live-dot"></span>
+                LIVE
+              </div>
+            )}
+          </div>
+          <div className="events-list" ref={listRef}>
+            {filteredEvents.map(event => (
+              <EventRow key={event.id} event={event} viewMode={viewMode} />
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // Egg Card Component
+    function EggCard({ egg }) {
+      const [activeTab, setActiveTab] = useState('log');
+      const tabs = [
+        { id: 'trades', label: 'Trades', icon: '📈' },
+        { id: 'config', label: 'Config', icon: '⚙️' },
+        { id: 'ai', label: 'AI', icon: '🤖' },
+        { id: 'log', label: 'LOG', icon: '📋' }
+      ];
+
+      return (
+        <div className="egg-card">
+          <div className="egg-header">
+            <div className="egg-title">
+              <span className="egg-icon">🥚</span>
+              <span className="egg-name">{egg.name}</span>
+            </div>
+            <span className={`egg-status status-${egg.status}`}>
+              {egg.status === 'incubating' ? '🔄 Incubating' : '✓ Completed'}
+            </span>
+          </div>
+
+          <div className="tabs">
+            {tabs.map(tab => (
+              <div
+                key={tab.id}
+                className={`tab ${activeTab === tab.id ? 'active' : ''}`}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                <span>{tab.icon}</span>
+                <span>{tab.label}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="tab-content">
+            {activeTab === 'trades' && (
+              <div className="trades-list">
+                {egg.trades.length === 0 ? (
+                  <div style={{color: '#666', textAlign: 'center', padding: '40px'}}>
+                    Generating trades...
+                  </div>
+                ) : egg.trades.map((trade, i) => (
+                  <div key={i} className="trade-card">
+                    <div className="trade-header">
+                      <span className="trade-symbol">{trade.symbol}</span>
+                      <span className={`trade-direction direction-${trade.direction.toLowerCase()}`}>
+                        {trade.direction}
+                      </span>
+                    </div>
+                    <div className="trade-details">
+                      <div className="trade-detail"><label>Entry</label><value>${trade.entry.toLocaleString()}</value></div>
+                      <div className="trade-detail"><label>Stop Loss</label><value>${trade.sl.toLocaleString()}</value></div>
+                      <div className="trade-detail"><label>Take Profit</label><value>${trade.tp.toLocaleString()}</value></div>
+                      <div className="trade-detail"><label>Leverage</label><value>{trade.leverage}x</value></div>
+                      <div className="trade-detail"><label>IPE Score</label><value>{trade.ipe}</value></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {activeTab === 'config' && (
+              <div className="config-grid">
+                <div className="config-item">
+                  <div className="config-label">Symbol</div>
+                  <div className="config-value">{egg.config.symbol}</div>
+                </div>
+                <div className="config-item">
+                  <div className="config-label">Timeframe</div>
+                  <div className="config-value">{egg.config.timeframe}</div>
+                </div>
+                <div className="config-item">
+                  <div className="config-label">Risk %</div>
+                  <div className="config-value">{egg.config.riskPercent}%</div>
+                </div>
+                <div className="config-item">
+                  <div className="config-label">Max Leverage</div>
+                  <div className="config-value">{egg.config.maxLeverage}x</div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'ai' && (
+              <div className="ai-response">
+{`Based on my analysis of ${egg.config.symbol}:
+
+Technical Analysis:
+- RSI(14): 62 - Neutral to slightly overbought
+- MACD: Bullish crossover confirmed
+- Volume: Above 20-day average
+- Trend: Strong upward momentum
+
+Market Context:
+The market is showing strength with clear bullish structure.
+Key support levels are holding well.
+
+Trade Reasoning:
+Given the bullish momentum and confirmed breakout above
+resistance, a LONG position offers favorable risk/reward.
+
+Confidence: 85%`}
+              </div>
+            )}
+
+            {activeTab === 'log' && (
+              <EventLog
+                events={egg.events}
+                isLive={egg.status === 'incubating'}
+              />
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // Main Incubator Component
+    function Incubator() {
+      const [filter, setFilter] = useState('all');
+      const [eggs, setEggs] = useState(DEMO_EGGS);
+
+      // Simulate live events for incubating eggs
+      useEffect(() => {
+        const interval = setInterval(() => {
+          setEggs(prevEggs => prevEggs.map(egg => {
+            if (egg.status === 'incubating' && egg.events.length < 15) {
+              const newEvent = {
+                id: egg.events.length + 1,
+                type: 'AI_CHUNK',
+                timestamp: Date.now(),
+                level: 'info',
+                icon: '💭',
+                title: 'AI Processing...',
+                detail: 'Analyzing market patterns and generating trade ideas...'
+              };
+              return { ...egg, events: [...egg.events, newEvent] };
+            }
+            return egg;
+          }));
+        }, 3000);
+
+        return () => clearInterval(interval);
+      }, []);
+
+      const filteredEggs = eggs.filter(egg => {
+        if (filter === 'live') return egg.status === 'incubating';
+        if (filter === 'completed') return egg.status === 'completed';
+        return true;
+      });
+
+      return (
+        <div>
+          <div className="header">
+            <h1>🥚 Incubator - Trading Pipeline</h1>
+            <p>Solution 2: Streaming Event Log - Real-time transparency for trade generation</p>
+          </div>
+
+          <div className="container">
+            <div className="filter-tabs">
+              {[
+                { id: 'all', label: 'All Eggs', count: eggs.length },
+                { id: 'live', label: 'Live', count: eggs.filter(e => e.status === 'incubating').length },
+                { id: 'completed', label: 'Completed', count: eggs.filter(e => e.status === 'completed').length }
+              ].map(tab => (
+                <div
+                  key={tab.id}
+                  className={`filter-tab ${filter === tab.id ? 'active' : ''}`}
+                  onClick={() => setFilter(tab.id)}
+                >
+                  {tab.label} ({tab.count})
+                </div>
+              ))}
+            </div>
+
+            <div className="eggs-grid">
+              {filteredEggs.map(egg => (
+                <EggCard key={egg.id} egg={egg} />
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Render
+    ReactDOM.createRoot(document.getElementById('root')).render(<Incubator />);
+  </script>
+</body>
+</html>
