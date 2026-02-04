@@ -1,11 +1,12 @@
 import { motion } from 'framer-motion'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, LogOut } from 'lucide-react'
 import useStore from '../store/useStore'
 import SyncStatus from './SyncStatus'
 
 export default function Header({ title, subtitle, rightAction }) {
   const priceStatus = useStore((state) => state.priceStatus) || {}
   const refreshPrices = useStore((state) => state.refreshPrices)
+  const logout = useStore((state) => state.logout)
   const { isFetching = false, lastUpdated = null, source = null, fallbackUsed = false, error = null } = priceStatus
 
   const handleRefresh = async () => {
@@ -67,6 +68,15 @@ export default function Header({ title, subtitle, rightAction }) {
           <SyncStatus />
 
           {rightAction && rightAction}
+
+          {/* Logout Button */}
+          <button
+            onClick={logout}
+            className="p-2 rounded-lg bg-quant-surface text-gray-400 hover:text-accent-red hover:bg-accent-red/10 transition-all"
+            title="Logout"
+          >
+            <LogOut size={16} />
+          </button>
         </div>
       </div>
     </motion.header>
