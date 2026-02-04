@@ -15,16 +15,21 @@ import FAB from './components/FAB'
 import Onboarding from './components/Onboarding'
 import Login from './components/Login'
 import EggIcon from './components/EggIcon'
-import { supabase } from './lib/supabase'
+import { supabase, signOut } from './lib/supabase'
+
+// Allowed email addresses (whitelist)
+const ALLOWED_EMAILS = ['victor.trujillo@gmail.com']
 
 function App() {
   // Auth state
   const user = useStore((state) => state.user)
   const isAuthenticated = useStore((state) => state.isAuthenticated)
   const authLoading = useStore((state) => state.authLoading)
+  const authError = useStore((state) => state.authError)
   const setUser = useStore((state) => state.setUser)
   const setSession = useStore((state) => state.setSession)
   const setAuthLoading = useStore((state) => state.setAuthLoading)
+  const setAuthError = useStore((state) => state.setAuthError)
 
   // Use individual selectors with safe defaults
   const activeTab = useStore((state) => state.activeTab) || 'prompts'
@@ -43,22 +48,37 @@ function App() {
 
   // Listen for auth state changes
   useEffect(() => {
-    // Check initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    const checkEmailAndSetUser = async (session) => {
+      if (session?.user) {
+        const email = session.user.email
+        if (!ALLOWED_EMAILS.includes(email)) {
+          // Unauthorized email - sign out immediately
+          await signOut()
+          setAuthError(`Access denied. Email "${email}" is not authorized.`)
+          setSession(null)
+          setUser(null)
+          setAuthLoading(false)
+          return
+        }
+      }
+      setAuthError(null)
       setSession(session)
       setUser(session?.user ?? null)
       setAuthLoading(false)
+    }
+
+    // Check initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      checkEmailAndSetUser(session)
     })
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      setAuthLoading(false)
+      checkEmailAndSetUser(session)
     })
 
     return () => subscription.unsubscribe()
-  }, [setUser, setSession, setAuthLoading])
+  }, [setUser, setSession, setAuthLoading, setAuthError])
 
   // Initialize data from Supabase cloud when authenticated
   useEffect(() => {
@@ -91,7 +111,7 @@ function App() {
 
   // Show login if not authenticated
   if (!isAuthenticated) {
-    return <Login />
+    return <Login authError={authError} />
   }
 
   // Show onboarding if not completed (after login)

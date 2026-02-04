@@ -13,9 +13,12 @@ const GoogleIcon = () => (
   </svg>
 )
 
-export default function Login() {
+export default function Login({ authError }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  // Show auth error from parent (e.g., unauthorized email)
+  const displayError = authError || error
 
   const handleGoogleLogin = async () => {
     setLoading(true)
@@ -65,13 +68,13 @@ export default function Login() {
             Sign in to continue
           </h2>
 
-          {error && (
+          {displayError && (
             <motion.div
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
               className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg mb-6 text-sm"
             >
-              {error}
+              {displayError}
             </motion.div>
           )}
 

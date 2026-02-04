@@ -855,14 +855,16 @@ If no truly new strategy can be generated, you must invent a new angle rather th
       session: null,
       isAuthenticated: false,
       authLoading: true,
+      authError: null,
 
       setUser: (user) => set({ user, isAuthenticated: !!user }),
       setSession: (session) => set({ session }),
       setAuthLoading: (loading) => set({ authLoading: loading }),
+      setAuthError: (error) => set({ authError: error }),
 
       logout: async () => {
         await signOut()
-        set({ user: null, session: null, isAuthenticated: false })
+        set({ user: null, session: null, isAuthenticated: false, authError: null })
       },
 
       // Price State
