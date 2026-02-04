@@ -65,7 +65,7 @@ const buildAIPrompt = (userPrompt, settings, prices, config) => {
     .map(([asset, price]) => `- ${asset}: $${price.toLocaleString()}`)
     .join('\n')
 
-  return `You are a quantitative trading analyst. Based on the user's trading strategy and current market prices, generate ${config.numResults || 3} specific trade signals.
+  return `You are a quantitative trading analyst. Based on the user's trading strategy, generate exactly ${config.numResults || 3} trade signals.
 
 ## USER'S TRADING STRATEGY:
 ${userPrompt.content}
@@ -94,10 +94,10 @@ Each trade must have this exact structure:
     "ipe": 85,
     "summary": "One line explaining the main reason for this trade (max 80 chars)",
     "reasoning": {
-      "whyAsset": "Why this specific asset was chosen from the available options",
+      "whyAsset": "Why this specific asset was chosen based on the user's strategy",
       "whyDirection": "Why LONG or SHORT based on the user's strategy criteria",
-      "whyEntry": "How the entry price was determined (current price adjustment, support/resistance)",
-      "whyLevels": "How TP and SL were calculated (risk/reward, key levels)"
+      "whyEntry": "How the entry price was determined using current market prices",
+      "whyLevels": "How TP and SL were calculated based on the user's configuration"
     },
     "criteriaMatched": [
       {"criterion": "RSI < 30", "value": "28", "passed": true},
@@ -114,9 +114,9 @@ Each trade must have this exact structure:
 ]
 
 ## RULES:
-1. Use ONLY the assets from the provided price list
-2. Entry price should be very close to current price (within 0.5%)
-3. For target-based trades: TP distance = (target% / leverage) from entry
+1. Select assets based on the user's strategy - use market prices above as reference for realistic entry levels
+2. Entry price should be very close to current market price (within 0.5%)
+3. TP and SL must follow the user's configuration (target profit %, leverage, capital)
 4. Risk:Reward ratio must be at least 2:1
 5. IPE score (Investment Potential Estimate) should be 70-95 based on setup quality
 6. Reasoning must explain HOW the user's strategy applies to this specific trade
@@ -533,11 +533,8 @@ export const generateTradesFromPrompt = async (prompt, settings, numResults = 3,
   // STEP: FETCH PRICES
   emitter.emit(PIPELINE_STEPS.FETCH_PRICES, 'started', 'Solicitando precios a Binance...')
 
-  // Select random assets
-  const shuffledAssets = [...CRYPTO_ASSETS].sort(() => Math.random() - 0.5)
-  const selectedAssets = shuffledAssets.slice(0, Math.min(numResults * 2, 10))
-
-  const realPrices = await fetchRealPrices(selectedAssets)
+  // Fetch all available asset prices so the AI can choose based on the user's strategy
+  const realPrices = await fetchRealPrices(CRYPTO_ASSETS)
 
   if (!realPrices || Object.keys(realPrices).length === 0) {
     emitter.emit(PIPELINE_STEPS.FETCH_PRICES, 'error', 'No se pudieron obtener precios de Binance')
