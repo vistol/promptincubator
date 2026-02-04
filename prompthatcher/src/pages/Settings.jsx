@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Cpu, FileText, Database, ChevronRight, Eye, EyeOff, Check, X, AlertCircle, Edit3, Plus, ChevronDown, ChevronUp, Cloud, RefreshCw, Download, Upload, Activity, TrendingUp, Trash2, Link, Unlink, Info, Egg, BarChart3, ScrollText, Zap, Timer, Shield } from 'lucide-react'
+import { Cpu, FileText, Database, ChevronRight, Eye, EyeOff, Check, X, AlertCircle, Edit3, Plus, ChevronDown, ChevronUp, Cloud, RefreshCw, Download, Upload, Activity, TrendingUp, Trash2, Link, Unlink, Info, Egg, BarChart3, ScrollText, Zap, Timer, Shield, LogOut, User } from 'lucide-react'
 import useStore from '../store/useStore'
 import Header from '../components/Header'
 import PromptEditorModal from '../components/PromptEditorModal'
@@ -86,7 +86,9 @@ export default function Settings() {
     eggs,
     signals,
     settingsActiveTab,
-    setSettingsActiveTab
+    setSettingsActiveTab,
+    user,
+    logout
   } = useStore()
 
   const activeTab = settingsActiveTab
@@ -924,6 +926,51 @@ export default function Settings() {
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* Account */}
+              <div className="bg-quant-card border border-quant-border rounded-xl p-4">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 rounded-lg bg-accent-purple/20">
+                    <User size={20} className="text-accent-purple" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-white">Account</h3>
+                    <span className="text-xs text-gray-500">Signed in with Google</span>
+                  </div>
+                </div>
+
+                {user && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3 p-3 bg-quant-surface rounded-xl">
+                      {user.user_metadata?.avatar_url ? (
+                        <img
+                          src={user.user_metadata.avatar_url}
+                          alt="Profile"
+                          className="w-10 h-10 rounded-full"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-full bg-accent-cyan/20 flex items-center justify-center">
+                          <User size={20} className="text-accent-cyan" />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white font-medium truncate">
+                          {user.user_metadata?.full_name || user.email}
+                        </p>
+                        <p className="text-xs text-gray-500 truncate">{user.email}</p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={logout}
+                      className="w-full py-3 rounded-xl bg-accent-red/20 text-accent-red font-medium flex items-center justify-center gap-2 hover:bg-accent-red/30 transition-all"
+                    >
+                      <LogOut size={16} />
+                      Sign Out
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* App Info */}

@@ -1,22 +1,61 @@
 import { createClient } from '@supabase/supabase-js'
 
+// Hardcoded Supabase credentials (safe to expose - security via RLS)
+const SUPABASE_URL = 'https://mbictfzbkvmxysmiovlv.supabase.co'
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1iaWN0Znpia3ZteHlzbWlvdmx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk0NzIwMjEsImV4cCI6MjA4NTA0ODAyMX0.XUbfMC90Osbosb94fmbBUv-cezbd2VJ3jAvrrzhV0bs'
+
+// Single Supabase client instance with session persistence
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true
+  }
+})
+
+// Auth functions
+export const signInWithGoogle = async () => {
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: window.location.origin + window.location.pathname
+    }
+  })
+  return { data, error }
+}
+
+export const signOut = async () => {
+  const { error } = await supabase.auth.signOut()
+  return { error }
+}
+
+export const getSession = async () => {
+  const { data: { session }, error } = await supabase.auth.getSession()
+  return { session, error }
+}
+
+export const getUser = async () => {
+  const { data: { user }, error } = await supabase.auth.getUser()
+  return { user, error }
+}
+
+export const onAuthStateChange = (callback) => {
+  return supabase.auth.onAuthStateChange(callback)
+}
+
+// Helper to get current user ID for RLS
+export const getCurrentUserId = async () => {
+  const { data: { user } } = await supabase.auth.getUser()
+  return user?.id || null
+}
+
+// Legacy function for backward compatibility
 let supabaseClient = null
 
-// Initialize or get Supabase client
+// Initialize or get Supabase client (legacy - use 'supabase' export instead)
 export const getSupabaseClient = (url, anonKey) => {
-  if (!url || !anonKey) {
-    return null
-  }
-
-  if (!supabaseClient || supabaseClient.supabaseUrl !== url) {
-    supabaseClient = createClient(url, anonKey, {
-      auth: {
-        persistSession: false
-      }
-    })
-  }
-
-  return supabaseClient
+  // Always return the hardcoded client now
+  return supabase
 }
 
 // Test connection to Supabase
@@ -140,8 +179,12 @@ export const syncPrompts = async (client, prompts) => {
   if (!client || !prompts.length) return { success: true }
 
   try {
+    const userId = await getCurrentUserId()
+    if (!userId) return { success: false, error: 'Not authenticated' }
+
     const formattedPrompts = prompts.map(p => ({
       id: p.id,
+      user_id: userId,
       name: p.name,
       content: p.content,
       mode: p.mode,
@@ -179,8 +222,12 @@ export const syncSignals = async (client, signals) => {
   if (!client || !signals.length) return { success: true }
 
   try {
+    const userId = await getCurrentUserId()
+    if (!userId) return { success: false, error: 'Not authenticated' }
+
     const formattedSignals = signals.map(s => ({
       id: s.id,
+      user_id: userId,
       prompt_id: s.promptId,
       prompt_name: s.promptName,
       asset: s.asset,
@@ -214,9 +261,12 @@ export const syncSettings = async (client, settings) => {
   if (!client) return { success: true }
 
   try {
-    // Core settings upsert
+    const userId = await getCurrentUserId()
+    if (!userId) return { success: false, error: 'Not authenticated' }
+
+    // Core settings upsert - use user_id as the unique identifier
     const settingsData = {
-      id: 1,
+      user_id: userId,
       ai_provider: settings.aiProvider,
       ai_model: settings.aiModel,
       system_prompt: settings.systemPrompt,
@@ -225,7 +275,7 @@ export const syncSettings = async (client, settings) => {
 
     const { error } = await client
       .from('settings')
-      .upsert(settingsData, { onConflict: 'id' })
+      .upsert(settingsData, { onConflict: 'user_id' })
 
     if (error) throw error
 
@@ -234,7 +284,7 @@ export const syncSettings = async (client, settings) => {
       const { error: graceError } = await client
         .from('settings')
         .update({ grace_period_minutes: settings.gracePeriodMinutes })
-        .eq('id', 1)
+        .eq('user_id', userId)
 
       if (graceError) {
         console.warn('grace_period_minutes column not available in Supabase, skipping:', graceError.message)
@@ -331,10 +381,13 @@ export const loadSettings = async (client) => {
   if (!client) return { success: false, data: null }
 
   try {
+    const userId = await getCurrentUserId()
+    if (!userId) return { success: false, data: null, error: 'Not authenticated' }
+
     const { data, error } = await client
       .from('settings')
       .select('*')
-      .eq('id', 1)
+      .eq('user_id', userId)
       .single()
 
     if (error && error.code !== 'PGRST116') throw error
@@ -503,6 +556,9 @@ export const syncEggs = async (client, eggs) => {
   if (!client || !eggs.length) return { success: true }
 
   try {
+    const userId = await getCurrentUserId()
+    if (!userId) return { success: false, error: 'Not authenticated' }
+
     // VALIDATION: Ensure all required fields are never empty before syncing
     const formattedEggs = eggs.map(e => {
       // Validate and ensure prompt_content is never empty
@@ -527,6 +583,7 @@ export const syncEggs = async (client, eggs) => {
 
       return {
         id: e.id,
+        user_id: userId,
         prompt_id: e.promptId,
         prompt_name: e.promptName || 'Unnamed Strategy',
         prompt_content: promptContent,
@@ -648,8 +705,12 @@ export const syncHealthChecks = async (client, healthChecks) => {
   if (!client || !healthChecks.length) return { success: true }
 
   try {
+    const userId = await getCurrentUserId()
+    if (!userId) return { success: false, error: 'Not authenticated' }
+
     const formattedChecks = healthChecks.map(hc => ({
       id: hc.id,
+      user_id: userId,
       name: hc.name,
       preset: hc.preset,
       prompts: hc.prompts,

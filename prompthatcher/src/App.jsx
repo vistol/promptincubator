@@ -13,9 +13,19 @@ import SignalDetailModal from './components/SignalDetailModal'
 import PromptActionModal from './components/PromptActionModal'
 import FAB from './components/FAB'
 import Onboarding from './components/Onboarding'
+import Login from './components/Login'
 import EggIcon from './components/EggIcon'
+import { supabase } from './lib/supabase'
 
 function App() {
+  // Auth state
+  const user = useStore((state) => state.user)
+  const isAuthenticated = useStore((state) => state.isAuthenticated)
+  const authLoading = useStore((state) => state.authLoading)
+  const setUser = useStore((state) => state.setUser)
+  const setSession = useStore((state) => state.setSession)
+  const setAuthLoading = useStore((state) => state.setAuthLoading)
+
   // Use individual selectors with safe defaults
   const activeTab = useStore((state) => state.activeTab) || 'prompts'
   const isNewPromptModalOpen = useStore((state) => state.isNewPromptModalOpen) || false
@@ -30,25 +40,36 @@ function App() {
   const isCloudInitialized = useStore((state) => state.isCloudInitialized) || false
   const isInitializing = useStore((state) => state.isInitializing) || false
   const initializeFromCloud = useStore((state) => state.initializeFromCloud)
-  const settings = useStore((state) => state.settings) || {}
 
-  // Initialize data from Supabase cloud on app start
-  const supabaseConfig = settings?.supabase || {}
+  // Listen for auth state changes
   useEffect(() => {
-    if (onboardingCompleted && !isCloudInitialized && !isInitializing) {
-      // Check if Supabase is configured
-      if (supabaseConfig.url && supabaseConfig.anonKey) {
-        initializeFromCloud()
-      } else {
-        // No Supabase, mark as initialized with empty data
-        useStore.setState({ isCloudInitialized: true })
-      }
+    // Check initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      setUser(session?.user ?? null)
+      setAuthLoading(false)
+    })
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+      setUser(session?.user ?? null)
+      setAuthLoading(false)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [setUser, setSession, setAuthLoading])
+
+  // Initialize data from Supabase cloud when authenticated
+  useEffect(() => {
+    if (isAuthenticated && !isCloudInitialized && !isInitializing) {
+      initializeFromCloud()
     }
-  }, [onboardingCompleted, isCloudInitialized, isInitializing, supabaseConfig.url, supabaseConfig.anonKey, initializeFromCloud])
+  }, [isAuthenticated, isCloudInitialized, isInitializing, initializeFromCloud])
 
   // Start price refresh interval when cloud data is loaded
   useEffect(() => {
-    if (onboardingCompleted && isCloudInitialized) {
+    if (isAuthenticated && isCloudInitialized) {
       // Start automatic price refresh (every 15 minutes)
       startPriceRefresh()
 
@@ -57,9 +78,23 @@ function App() {
         stopPriceRefresh()
       }
     }
-  }, [onboardingCompleted, isCloudInitialized, startPriceRefresh, stopPriceRefresh])
+  }, [isAuthenticated, isCloudInitialized, startPriceRefresh, stopPriceRefresh])
 
-  // Show onboarding if not completed
+  // Show loading while checking auth
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-quant-bg flex flex-col items-center justify-center">
+        <Loader2 size={48} className="text-accent-cyan animate-spin" />
+      </div>
+    )
+  }
+
+  // Show login if not authenticated
+  if (!isAuthenticated) {
+    return <Login />
+  }
+
+  // Show onboarding if not completed (after login)
   if (!onboardingCompleted) {
     return <Onboarding />
   }
@@ -82,7 +117,7 @@ function App() {
           <h2 className="text-xl font-bold text-white mb-2">Loading from Cloud</h2>
           <p className="text-sm text-gray-400 flex items-center justify-center gap-2">
             <Cloud size={16} />
-            Syncing with Supabase...
+            Syncing your data...
           </p>
         </motion.div>
       </div>

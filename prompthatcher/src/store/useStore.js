@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import {
+  supabase,
   getSupabaseClient,
   syncPrompts,
   syncSignals,
@@ -15,7 +16,8 @@ import {
   deletePromptFromCloud,
   deleteEggFromCloud,
   deleteHealthCheckFromCloud,
-  repairEggsData
+  repairEggsData,
+  signOut
 } from '../lib/supabase'
 import { generateTradesFromPrompt } from '../lib/aiService'
 import { createExecutionLog, calculateExecutionSummary } from '../lib/executionLog'
@@ -847,6 +849,21 @@ If no truly new strategy can be generated, you must invent a new angle rather th
           tradingPlatform: { ...state.settings.tradingPlatform, ...updates }
         }
       })),
+
+      // Auth State
+      user: null,
+      session: null,
+      isAuthenticated: false,
+      authLoading: true,
+
+      setUser: (user) => set({ user, isAuthenticated: !!user }),
+      setSession: (session) => set({ session }),
+      setAuthLoading: (loading) => set({ authLoading: loading }),
+
+      logout: async () => {
+        await signOut()
+        set({ user: null, session: null, isAuthenticated: false })
+      },
 
       // Price State
       prices: {},
@@ -1725,12 +1742,8 @@ If no truly new strategy can be generated, you must invent a new angle rather th
 
       // Get Supabase client if configured
       getClient: () => {
-        const state = get()
-        const { url, anonKey } = state.settings.supabase
-        if (url && anonKey) {
-          return getSupabaseClient(url, anonKey)
-        }
-        return null
+        // Always return the hardcoded supabase client (auth handles access control)
+        return supabase
       },
 
       // Cloud initialization state
