@@ -203,6 +203,11 @@ export default function Prompts() {
             return (b.eggs?.length || 0) - (a.eggs?.length || 0)
           case 'trades':
             return (b.totalTrades || 0) - (a.totalTrades || 0)
+          case 'recent': {
+            const latestA = a.eggs?.length ? Math.max(...a.eggs.map(e => new Date(e.createdAt || 0).getTime())) : 0
+            const latestB = b.eggs?.length ? Math.max(...b.eggs.map(e => new Date(e.createdAt || 0).getTime())) : 0
+            return latestB - latestA
+          }
           case 'pnl':
           default:
             return (b.totalPnl || 0) - (a.totalPnl || 0)
@@ -252,7 +257,8 @@ export default function Prompts() {
     { id: 'pnl', label: 'PnL' },
     { id: 'winRate', label: 'Win Rate' },
     { id: 'eggs', label: 'Most Eggs' },
-    { id: 'trades', label: 'Most Trades' }
+    { id: 'trades', label: 'Most Trades' },
+    { id: 'recent', label: 'Reciente' }
   ]
 
   const filterOptions = [
@@ -616,6 +622,7 @@ export default function Prompts() {
                                             size={32}
                                             status={egg.isExpired ? 'expired' : 'hatched'}
                                             winRate={egg.results?.winRate || 0}
+                                            isHealthCheck={!!egg.isHealthCheck || !!egg.healthCheckId}
                                           />
 
                                           {/* Egg Info */}

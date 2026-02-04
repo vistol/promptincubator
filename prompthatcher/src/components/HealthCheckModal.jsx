@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, HeartPulse, Clock, DollarSign, Zap, Target, Check, Hash, FlaskConical, ArrowRight, ArrowLeft, Brain, Timer, Shield, Gauge, Layers, Sparkles } from 'lucide-react'
+import { X, HeartPulse, Clock, DollarSign, Zap, Target, Check, Hash, FlaskConical, ArrowRight, ArrowLeft, Brain, Timer, Shield, Gauge, Layers, Sparkles, AlertCircle } from 'lucide-react'
 import useStore from '../store/useStore'
 
 // Batch presets configuration
@@ -161,8 +161,10 @@ const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 export default function HealthCheckModal({ check, onClose }) {
   const prompts = useStore((state) => state.prompts) || []
+  const settings = useStore((state) => state.settings)
   const addHealthCheck = useStore((state) => state.addHealthCheck)
   const updateHealthCheck = useStore((state) => state.updateHealthCheck)
+  const runHealthCheck = useStore((state) => state.runHealthCheck)
 
   const isEditing = !!check
 
@@ -200,7 +202,10 @@ export default function HealthCheckModal({ check, onClose }) {
 
   const handleSelectPreset = (preset) => {
     setSelectedPreset(preset)
-    setName(`${preset.name} - ${new Date().toLocaleDateString()}`)
+    const now = new Date()
+    const date = now.toLocaleDateString()
+    const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    setName(`${preset.name} - ${date} ${time}`)
   }
 
   const handleProceedToConfig = () => {
@@ -239,6 +244,38 @@ export default function HealthCheckModal({ check, onClose }) {
       addHealthCheck(newCheck)
     }
     onClose()
+  }
+
+  const handleSaveAndRun = () => {
+    if (!canSave) return
+
+    const newCheck = {
+      id: check?.id || `hc-${Date.now()}`,
+      name: name.trim(),
+      preset: selectedPreset,
+      prompts: selectedPrompts,
+      schedule: {
+        frequency,
+        time: frequency !== 'hourly' ? time : null,
+        interval: frequency === 'hourly' ? interval : null,
+        days: frequency === 'weekly' ? selectedDays : null,
+      },
+      capital,
+      eggs: selectedPreset.eggs,
+      variations: selectedPreset.config.variations,
+      isActive: check?.isActive ?? true,
+      createdAt: check?.createdAt || new Date().toISOString(),
+      lastRun: null,
+    }
+
+    if (isEditing) {
+      updateHealthCheck(check.id, newCheck)
+    } else {
+      addHealthCheck(newCheck)
+    }
+    onClose()
+    // Run immediately after creating
+    setTimeout(() => runHealthCheck(newCheck.id), 300)
   }
 
   return (
@@ -537,26 +574,76 @@ export default function HealthCheckModal({ check, onClose }) {
                 </div>
 
                 {/* Variations Preview */}
-                {selectedPreset && (
-                  <div className="p-3 bg-quant-surface rounded-xl border border-quant-border">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Sparkles size={12} className="text-accent-cyan" />
-                      <span className="text-[10px] text-gray-500 uppercase tracking-wider">Test Variations</span>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {selectedPreset.config.variations.slice(0, 8).map((v, i) => (
-                        <span key={i} className="text-[10px] px-2 py-1 rounded-lg bg-quant-card text-gray-400 font-mono">
-                          {Object.entries(v).map(([k, val]) => `${k}:${val}`).join(' ')}
+                {selectedPreset && (() => {
+                  const apiKeys = settings.apiKeys || {}
+                  const defaultModel = selectedPrompts[0]?.aiModel || settings.aiProvider || 'google'
+                  const modelNames = { google: 'Gemini', anthropic: 'Claude', openai: 'GPT', xai: 'Grok' }
+                  const missingModels = [...new Set(
+                    selectedPreset.config.variations
+                      .map(v => v.aiModel || defaultModel)
+                      .filter(m => !apiKeys[m])
+                  )]
+                  const runnableCount = selectedPreset.config.variations.filter(v => {
+                    const m = v.aiModel || defaultModel
+                    return !!apiKeys[m]
+                  }).length
+
+                  return (
+                    <div className="p-3 bg-quant-surface rounded-xl border border-quant-border">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Sparkles size={12} className="text-accent-cyan" />
+                        <span className="text-[10px] text-gray-500 uppercase tracking-wider">
+                          Test Variations ({runnableCount}/{selectedPreset.config.variations.length} runnable)
                         </span>
-                      ))}
-                      {selectedPreset.config.variations.length > 8 && (
-                        <span className="text-[10px] px-2 py-1 rounded-lg bg-quant-card text-gray-500">
-                          +{selectedPreset.config.variations.length - 8} more
-                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {selectedPreset.config.variations.slice(0, 8).map((v, i) => {
+                          const model = v.aiModel || defaultModel
+                          const hasKey = !!apiKeys[model]
+                          return (
+                            <span key={i} className={`text-[10px] px-2 py-1 rounded-lg font-mono ${
+                              hasKey
+                                ? 'bg-quant-card text-gray-400'
+                                : 'bg-accent-red/10 text-accent-red/60 line-through'
+                            }`}>
+                              {Object.entries(v).map(([k, val]) => `${k}:${val}`).join(' ')}
+                            </span>
+                          )
+                        })}
+                        {selectedPreset.config.variations.length > 8 && (
+                          <span className="text-[10px] px-2 py-1 rounded-lg bg-quant-card text-gray-500">
+                            +{selectedPreset.config.variations.length - 8} more
+                          </span>
+                        )}
+                      </div>
+                      {missingModels.length > 0 && (
+                        <div className="mt-2 flex items-start gap-1.5 p-2 bg-accent-red/10 border border-accent-red/20 rounded-lg">
+                          <AlertCircle size={12} className="text-accent-red shrink-0 mt-0.5" />
+                          <span className="text-[10px] text-gray-300">
+                            No API key for: <span className="text-accent-red font-medium">{missingModels.map(m => modelNames[m] || m).join(', ')}</span>.
+                            {' '}{missingModels.length < selectedPreset.config.variations.length
+                              ? `${runnableCount} variation(s) will run, ${missingModels.length} skipped.`
+                              : 'No variations can run. Add keys in Settings.'
+                            }
+                          </span>
+                        </div>
                       )}
                     </div>
-                  </div>
-                )}
+                  )
+                })()}
+
+                {/* Grace Period Info */}
+                <div className="flex items-center gap-2 p-2.5 bg-accent-yellow/10 border border-accent-yellow/20 rounded-xl">
+                  <Shield size={14} className="text-accent-yellow shrink-0" />
+                  <span className="text-xs text-gray-300">
+                    Trades tendran{' '}
+                    <span className="text-accent-yellow font-mono font-bold">
+                      {settings.gracePeriodMinutes || 5}min
+                    </span>
+                    {' '}de warmup antes de que TP/SL pueda cerrarlos.
+                    <span className="text-gray-500"> Configurable en Settings.</span>
+                  </span>
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -587,18 +674,29 @@ export default function HealthCheckModal({ check, onClose }) {
               )}
             </motion.button>
           ) : (
-            <motion.button
-              onClick={handleSave}
-              disabled={!canSave}
-              whileTap={{ scale: 0.98 }}
-              className="w-full py-4 rounded-xl bg-gradient-to-r from-accent-purple to-accent-cyan text-white font-bold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              style={{
-                boxShadow: canSave ? '0 0 20px rgba(139, 92, 246, 0.25)' : 'none'
-              }}
-            >
-              <FlaskConical size={18} />
-              Create Health Check ({selectedPreset?.eggs || 0} eggs)
-            </motion.button>
+            <div className="flex gap-2">
+              <motion.button
+                onClick={handleSave}
+                disabled={!canSave}
+                whileTap={{ scale: 0.98 }}
+                className="flex-1 py-4 rounded-xl bg-quant-surface border border-quant-border text-gray-300 font-bold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 hover:text-white transition-colors"
+              >
+                <FlaskConical size={18} />
+                Save
+              </motion.button>
+              <motion.button
+                onClick={handleSaveAndRun}
+                disabled={!canSave}
+                whileTap={{ scale: 0.98 }}
+                className="flex-[2] py-4 rounded-xl bg-gradient-to-r from-accent-purple to-accent-cyan text-white font-bold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                style={{
+                  boxShadow: canSave ? '0 0 20px rgba(139, 92, 246, 0.25)' : 'none'
+                }}
+              >
+                <Zap size={18} />
+                Run Now
+              </motion.button>
+            </div>
           )}
         </div>
       </motion.div>

@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  base: '/prototype/',
+  base: '/Documents/promptincubator/',
   server: {
     host: true,
     port: 5173,
@@ -41,7 +41,7 @@ export default defineConfig({
     }
   },
   build: {
-    outDir: 'dist',
+    outDir: '../',
     sourcemap: false
   }
 })

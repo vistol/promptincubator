@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Cpu, FileText, Database, ChevronRight, Eye, EyeOff, Check, X, AlertCircle, Edit3, Plus, Crown, ChevronDown, ChevronUp, Cloud, RefreshCw, Download, Upload, Activity, TrendingUp, Trash2, Link, Unlink, Info, Egg, BarChart3, ScrollText, Zap } from 'lucide-react'
+import { Cpu, FileText, Database, ChevronRight, Eye, EyeOff, Check, X, AlertCircle, Edit3, Plus, ChevronDown, ChevronUp, Cloud, RefreshCw, Download, Upload, Activity, TrendingUp, Trash2, Link, Unlink, Info, Egg, BarChart3, ScrollText, Zap, Timer, Shield } from 'lucide-react'
 import useStore from '../store/useStore'
 import Header from '../components/Header'
 import PromptEditorModal from '../components/PromptEditorModal'
@@ -38,7 +38,7 @@ const aiProviders = [
   {
     id: 'google',
     name: 'Google',
-    models: ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro'],
+    models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite'],
     icon: '🔮',
     color: 'from-blue-500 to-cyan-500',
     apiUrl: 'https://aistudio.google.com/apikey',
@@ -56,7 +56,7 @@ const aiProviders = [
   {
     id: 'xai',
     name: 'xAI (Grok)',
-    models: ['grok-beta', 'grok-2'],
+    models: ['grok-3-mini', 'grok-3'],
     icon: '⚡',
     color: 'from-orange-500 to-red-500',
     apiUrl: 'https://console.x.ai/',
@@ -73,7 +73,6 @@ export default function Settings() {
     updateSupabase,
     updateTradingPlatform,
     updatePrompt,
-    updateSystemPrompt,
     addPrompt,
     syncToCloud,
     loadFromCloud,
@@ -95,9 +94,6 @@ export default function Settings() {
   const [showApiKey, setShowApiKey] = useState({})
   const [testingConnection, setTestingConnection] = useState(false)
   const [connectionResult, setConnectionResult] = useState(null)
-  const [editingSystemPrompt, setEditingSystemPrompt] = useState(false)
-  const [systemPromptContent, setSystemPromptContent] = useState(settings.systemPrompt || '')
-  const [systemPromptExpanded, setSystemPromptExpanded] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
 
   // API Key testing state
@@ -238,12 +234,6 @@ export default function Settings() {
 
   const anyDeleteSelected = deleteOptions.deletePrompts || deleteOptions.deleteEggs ||
     deleteOptions.deleteSignals || deleteOptions.deleteLogs || deleteOptions.resetOnboarding
-
-  const handleSaveSystemPrompt = () => {
-    updateSystemPrompt(systemPromptContent)
-    setEditingSystemPrompt(false)
-  }
-
 
   const testSupabaseConnection = async () => {
     setTestingConnection(true)
@@ -467,105 +457,6 @@ export default function Settings() {
               exit={{ opacity: 0, x: -20 }}
               className="space-y-4"
             >
-              {/* System Prompt (Parent) - Most Important */}
-              <div className="bg-gradient-to-br from-accent-cyan/10 to-electric-600/10 border-2 border-accent-cyan/30 rounded-xl overflow-hidden">
-                <div className="p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <div className="p-1.5 rounded-lg bg-accent-cyan/20">
-                        <Crown size={18} className="text-accent-cyan" />
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-white">System Prompt</h3>
-                        <span className="text-xs text-accent-cyan">Parent prompt for AUTO mode</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          if (editingSystemPrompt) {
-                            handleSaveSystemPrompt()
-                          } else {
-                            setEditingSystemPrompt(true)
-                            setSystemPromptContent(settings.systemPrompt || '')
-                          }
-                        }}
-                        className={`p-2 rounded-lg transition-colors ${
-                          editingSystemPrompt
-                            ? 'bg-accent-green/20 text-accent-green'
-                            : 'hover:bg-quant-surface text-gray-400'
-                        }`}
-                      >
-                        {editingSystemPrompt ? <Check size={16} /> : <Edit3 size={16} />}
-                      </button>
-                      {!editingSystemPrompt && (
-                        <button
-                          onClick={() => setSystemPromptExpanded(!systemPromptExpanded)}
-                          className="p-2 rounded-lg hover:bg-quant-surface text-gray-400 transition-colors"
-                        >
-                          {systemPromptExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {editingSystemPrompt ? (
-                    <div className="space-y-3">
-                      <textarea
-                        value={systemPromptContent}
-                        onChange={(e) => setSystemPromptContent(e.target.value)}
-                        className="w-full bg-quant-surface border border-quant-border rounded-lg px-3 py-2 text-sm text-white font-mono resize-none"
-                        rows={15}
-                      />
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => setEditingSystemPrompt(false)}
-                          className="flex-1 py-2 rounded-lg bg-quant-surface text-gray-400 hover:text-white transition-colors"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={handleSaveSystemPrompt}
-                          className="flex-1 py-2 rounded-lg bg-accent-cyan/20 text-accent-cyan hover:bg-accent-cyan/30 transition-colors"
-                        >
-                          Save Changes
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <p className={`text-sm text-gray-400 font-mono ${systemPromptExpanded ? '' : 'line-clamp-3'}`}>
-                        {settings.systemPrompt}
-                      </p>
-                      {!systemPromptExpanded && (
-                        <button
-                          onClick={() => setSystemPromptExpanded(true)}
-                          className="text-xs text-accent-cyan mt-2 hover:underline"
-                        >
-                          Show full prompt...
-                        </button>
-                      )}
-                    </>
-                  )}
-
-                  <div className="flex items-center gap-2 mt-3 pt-3 border-t border-accent-cyan/20">
-                    <span className="text-xs text-accent-cyan bg-accent-cyan/10 px-2 py-1 rounded-full">
-                      MASTER TEMPLATE
-                    </span>
-                    <span className="text-xs text-gray-500">
-                      All AUTO prompts inherit from this
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Divider */}
-              <div className="flex items-center gap-3">
-                <div className="flex-1 h-px bg-quant-border" />
-                <span className="text-xs text-gray-500">Child Prompts</span>
-                <div className="flex-1 h-px bg-quant-border" />
-              </div>
-
               {/* Add New Button */}
               <button
                 onClick={() => {
@@ -763,6 +654,83 @@ export default function Settings() {
                       </div>
                     )}
                   </div>
+                </div>
+              </div>
+
+              {/* Grace Period (Warmup) */}
+              <div className="bg-quant-card border border-quant-border rounded-xl p-4">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 rounded-lg bg-accent-yellow/20">
+                    <Timer size={20} className="text-accent-yellow" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-white">Grace Period</h3>
+                    <span className="text-xs text-gray-500">Warmup antes de activar TP/SL</span>
+                  </div>
+                  <span className="text-sm font-mono text-accent-yellow">
+                    {settings.gracePeriodMinutes || 5}min
+                  </span>
+                </div>
+
+                {/* Info Box */}
+                <div className="p-3 bg-accent-yellow/10 border border-accent-yellow/20 rounded-xl mb-4">
+                  <div className="flex items-start gap-2">
+                    <Shield size={14} className="text-accent-yellow shrink-0 mt-0.5" />
+                    <p className="text-xs text-gray-300">
+                      Tras crear un egg, los trades mostraran precios y PnL en tiempo real
+                      pero <span className="text-white font-medium">NO se cerraran</span> por
+                      TP/SL durante este periodo. Esto previene cierres prematuros por
+                      volatilidad inicial.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Preset Buttons */}
+                <div className="flex gap-2 mb-3">
+                  {[
+                    { min: 2, label: '2m' },
+                    { min: 5, label: '5m' },
+                    { min: 15, label: '15m' },
+                    { min: 30, label: '30m' },
+                    { min: 60, label: '1h' },
+                  ].map((preset) => (
+                    <button
+                      key={preset.min}
+                      onClick={() => updateSettings({ gracePeriodMinutes: preset.min })}
+                      className={`flex-1 py-2.5 rounded-lg text-xs font-mono transition-all ${
+                        (settings.gracePeriodMinutes || 5) === preset.min
+                          ? 'bg-accent-yellow/20 text-accent-yellow border border-accent-yellow/30'
+                          : 'bg-quant-surface text-gray-400 border border-transparent'
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Slider */}
+                <input
+                  type="range"
+                  min={1}
+                  max={120}
+                  value={settings.gracePeriodMinutes || 5}
+                  onChange={(e) => updateSettings({ gracePeriodMinutes: Number(e.target.value) })}
+                  className="w-full h-1.5 accent-yellow-500"
+                />
+                <div className="flex justify-between mt-1 text-[9px] text-gray-600">
+                  <span>1 min</span>
+                  <span>120 min</span>
+                </div>
+
+                {/* Current Setting */}
+                <div className="mt-3 p-2 bg-quant-surface rounded-lg text-center">
+                  <span className="text-xs text-gray-400">
+                    Trades protegidos durante{' '}
+                    <span className="text-accent-yellow font-mono font-bold">
+                      {settings.gracePeriodMinutes || 5} minutos
+                    </span>
+                    {' '}tras su creacion
+                  </span>
                 </div>
               </div>
 

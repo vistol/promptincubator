@@ -112,6 +112,7 @@ export const initializeTables = async (client) => {
       expires_at TIMESTAMPTZ,
       hatched_at TIMESTAMPTZ,
       results JSONB,
+      execution_log JSONB,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
 
@@ -213,17 +214,33 @@ export const syncSettings = async (client, settings) => {
   if (!client) return { success: true }
 
   try {
+    // Core settings upsert
+    const settingsData = {
+      id: 1,
+      ai_provider: settings.aiProvider,
+      ai_model: settings.aiModel,
+      system_prompt: settings.systemPrompt,
+      updated_at: new Date().toISOString()
+    }
+
     const { error } = await client
       .from('settings')
-      .upsert({
-        id: 1,
-        ai_provider: settings.aiProvider,
-        ai_model: settings.aiModel,
-        system_prompt: settings.systemPrompt,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'id' })
+      .upsert(settingsData, { onConflict: 'id' })
 
     if (error) throw error
+
+    // Try to sync grace_period_minutes (column may not exist yet)
+    if (settings.gracePeriodMinutes !== undefined) {
+      const { error: graceError } = await client
+        .from('settings')
+        .update({ grace_period_minutes: settings.gracePeriodMinutes })
+        .eq('id', 1)
+
+      if (graceError) {
+        console.warn('grace_period_minutes column not available in Supabase, skipping:', graceError.message)
+      }
+    }
+
     return { success: true }
   } catch (err) {
     console.error('Sync settings error:', err)
@@ -328,7 +345,8 @@ export const loadSettings = async (client) => {
         data: {
           aiProvider: data.ai_provider,
           aiModel: data.ai_model,
-          systemPrompt: data.system_prompt
+          systemPrompt: data.system_prompt,
+          ...(data.grace_period_minutes !== undefined && { gracePeriodMinutes: data.grace_period_minutes })
         }
       }
     }
@@ -521,7 +539,9 @@ export const syncEggs = async (client, eggs) => {
         expires_at: e.expiresAt,
         hatched_at: e.hatchedAt,
         results: e.results,
-        created_at: e.createdAt || new Date().toISOString()
+        execution_log: e.executionLog || null,
+        created_at: e.createdAt || new Date().toISOString(),
+        ...(e.healthCheckId && { health_check_id: e.healthCheckId })
       }
     })
 
@@ -529,7 +549,19 @@ export const syncEggs = async (client, eggs) => {
       .from('eggs')
       .upsert(formattedEggs, { onConflict: 'id' })
 
-    if (error) throw error
+    if (error) {
+      // If health_check_id column doesn't exist, retry without it
+      if (error.message?.includes('health_check_id')) {
+        const fallbackEggs = formattedEggs.map(({ health_check_id, ...rest }) => rest)
+        const { error: fallbackError } = await client
+          .from('eggs')
+          .upsert(fallbackEggs, { onConflict: 'id' })
+        if (fallbackError) throw fallbackError
+        console.warn('health_check_id column not available in eggs table, synced without it')
+      } else {
+        throw error
+      }
+    }
     return { success: true }
   } catch (err) {
     console.error('Sync eggs error:', err)
@@ -563,7 +595,9 @@ export const loadEggs = async (client) => {
       expiresAt: e.expires_at,
       hatchedAt: e.hatched_at,
       results: e.results,
-      createdAt: e.created_at
+      executionLog: e.execution_log || null,
+      createdAt: e.created_at,
+      ...(e.health_check_id && { healthCheckId: e.health_check_id })
     }))
 
     return { success: true, data: formattedEggs }
@@ -625,14 +659,27 @@ export const syncHealthChecks = async (client, healthChecks) => {
       variations: hc.variations,
       is_active: hc.isActive,
       last_run: hc.lastRun,
-      created_at: hc.createdAt
+      created_at: hc.createdAt,
+      run_log: hc.runLog || []
     }))
 
     const { error } = await client
       .from('health_checks')
       .upsert(formattedChecks, { onConflict: 'id' })
 
-    if (error) throw error
+    if (error) {
+      // If run_log column doesn't exist, retry without it
+      if (error.message?.includes('run_log')) {
+        const fallbackChecks = formattedChecks.map(({ run_log, ...rest }) => rest)
+        const { error: fallbackError } = await client
+          .from('health_checks')
+          .upsert(fallbackChecks, { onConflict: 'id' })
+        if (fallbackError) throw fallbackError
+        console.warn('run_log column not available in health_checks table, synced without it')
+      } else {
+        throw error
+      }
+    }
     return { success: true }
   } catch (err) {
     console.error('Sync health checks error:', err)
@@ -663,7 +710,8 @@ export const loadHealthChecks = async (client) => {
       variations: hc.variations,
       isActive: hc.is_active,
       lastRun: hc.last_run,
-      createdAt: hc.created_at
+      createdAt: hc.created_at,
+      runLog: hc.run_log || []
     }))
 
     return { success: true, data: formattedChecks }

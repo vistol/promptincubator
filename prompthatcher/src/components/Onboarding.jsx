@@ -9,7 +9,7 @@ import useStore from '../store/useStore'
 const steps = [
   {
     id: 'welcome',
-    title: 'Welcome to PromptHatcher',
+    title: 'Welcome to Prompt Incubator',
     subtitle: 'Your trading strategy incubator'
   },
   {
@@ -442,7 +442,7 @@ export default function Onboarding() {
             className="flex-1 py-4 rounded-xl bg-gradient-to-r from-accent-cyan to-electric-600 text-quant-bg font-bold text-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
             {currentStep === steps.length - 1 ? (
-              'Start Using PromptHatcher'
+              'Start Using Prompt Incubator'
             ) : (
               <>
                 Continue

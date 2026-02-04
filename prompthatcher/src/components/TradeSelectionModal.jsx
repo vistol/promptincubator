@@ -1,18 +1,17 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Check, TrendingUp, TrendingDown, Loader2, AlertCircle, CheckSquare, Square, Shield, ChevronDown, ChevronUp, Lightbulb, Target, HelpCircle, CheckCircle2, XCircle } from 'lucide-react'
+import { X, Check, TrendingUp, TrendingDown, AlertCircle, CheckSquare, Square, Shield, ChevronDown, ChevronUp, Lightbulb, Target, HelpCircle, CheckCircle2, XCircle } from 'lucide-react'
 import useStore from '../store/useStore'
 import EggIcon from './EggIcon'
 
 export default function TradeSelectionModal({ prompt, onClose, onComplete }) {
   const {
     pendingTrades,
-    isGeneratingTrades,
     generationError,
     toggleTradeSelection,
     selectAllTrades,
     createEgg,
-    clearPendingTrades
+    clearPendingTrades,
   } = useStore()
 
   const selectedCount = pendingTrades.filter(t => t.selected).length
@@ -40,42 +39,6 @@ export default function TradeSelectionModal({ prompt, onClose, onComplete }) {
   const handleCancel = () => {
     clearPendingTrades()
     onClose()
-  }
-
-  if (isGeneratingTrades) {
-    return (
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-        onClick={handleCancel}
-      >
-        <motion.div
-          initial={{ scale: 0.9, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          className="bg-quant-card rounded-2xl p-8 max-w-sm mx-4 text-center"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="relative w-24 h-24 mx-auto mb-6">
-            <EggIcon size={96} status="incubating" />
-            <div className="absolute inset-0 flex items-center justify-center">
-              <Loader2 size={32} className="text-accent-cyan animate-spin" />
-            </div>
-          </div>
-          <h3 className="text-lg font-bold text-white mb-2">Generating Trades</h3>
-          <p className="text-sm text-gray-400 mb-6">
-            Fetching real-time prices from Binance and generating trading opportunities...
-          </p>
-          <button
-            onClick={handleCancel}
-            className="w-full py-3 rounded-xl bg-quant-surface text-gray-400 hover:text-white hover:bg-quant-border transition-colors active:scale-95"
-          >
-            Cancel
-          </button>
-        </motion.div>
-      </motion.div>
-    )
   }
 
   if (generationError) {

@@ -1,5 +1,6 @@
 // AI Service for generating trading signals from prompts
 import { fetchBinancePrices } from './priceService'
+import { PIPELINE_STEPS, createPipelineEmitter, generateHash } from './executionLog'
 
 // Minimum Risk/Reward ratio (Shell Calibration)
 const MIN_RISK_REWARD_RATIO = 2.0
@@ -161,10 +162,18 @@ const parseAIResponse = (responseText, prices, config) => {
       }
 
       const decimals = getDecimalPlaces(asset, currentPrice)
-      const entry = parseFloat(trade.entry) || currentPrice
+      let entry = parseFloat(trade.entry) || currentPrice
       const takeProfit = parseFloat(trade.takeProfit)
       const stopLoss = parseFloat(trade.stopLoss)
       const strategy = trade.strategy?.toUpperCase() === 'SHORT' ? 'SHORT' : 'LONG'
+
+      // Validate entry within 0.5% of current price - adjust if too far
+      const MAX_ENTRY_DEVIATION = 0.005
+      const entryDeviation = Math.abs(entry - currentPrice) / currentPrice
+      if (entryDeviation > MAX_ENTRY_DEVIATION) {
+        console.warn(`Entry ${entry} deviates ${(entryDeviation * 100).toFixed(2)}% from current ${currentPrice} for ${asset} - adjusting to current price`)
+        entry = currentPrice
+      }
 
       // Calculate R:R
       const rrRatio = calculateRiskReward(entry, takeProfit, stopLoss, strategy)
@@ -305,7 +314,7 @@ const callClaudeAPI = async (prompt, apiKey, model = 'claude-sonnet-4-20250514')
 }
 
 // Call Google Gemini API (supports browser calls natively)
-const callGeminiAPI = async (prompt, apiKey, model = 'gemini-1.5-flash') => {
+const callGeminiAPI = async (prompt, apiKey, model = 'gemini-2.5-flash') => {
   console.log(`Calling Gemini API with model: ${model}`)
 
   // Gemini API supports direct browser calls with API key in URL
@@ -358,27 +367,32 @@ const callOpenAIAPI = async (prompt, apiKey, model = 'gpt-4') => {
     max_tokens: 2048
   })
 
-  // Try proxy first for OpenAI (has CORS restrictions)
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${apiKey}`
+  }
+
+  const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
+
   let response
-  try {
-    response = await fetch('/api/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: body
-    })
-  } catch (e) {
-    // If proxy fails, try direct (may fail due to CORS)
-    response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: body
-    })
+
+  if (isViteDevServer()) {
+    try {
+      response = await fetch('/api/openai/v1/chat/completions', {
+        method: 'POST',
+        headers,
+        body
+      })
+      const ct = response.headers.get('content-type') || ''
+      if (!ct.includes('application/json')) {
+        throw new Error('Proxy returned non-JSON')
+      }
+    } catch (e) {
+      console.log('Vite proxy failed for OpenAI, using CORS proxy...', e.message)
+      response = await fetchViaCorsProxy(OPENAI_URL, { method: 'POST', headers, body })
+    }
+  } else {
+    response = await fetchViaCorsProxy(OPENAI_URL, { method: 'POST', headers, body })
   }
 
   if (!response.ok) {
@@ -399,41 +413,68 @@ const callOpenAIAPI = async (prompt, apiKey, model = 'gpt-4') => {
   return data.choices[0].message.content
 }
 
-// Call xAI Grok API
-const callGrokAPI = async (prompt, apiKey) => {
-  console.log('Calling Grok API...')
-
-  const body = JSON.stringify({
-    model: 'grok-beta',
-    messages: [
-      { role: 'system', content: 'You are a quantitative trading analyst. Always respond with valid JSON only.' },
-      { role: 'user', content: prompt }
-    ],
-    temperature: 0.7,
-    max_tokens: 2048
-  })
-
-  // Try proxy first for xAI
-  let response
+// Helper: detect if we're running on Vite dev server (has proxy support)
+const isViteDevServer = () => {
   try {
-    response = await fetch('/api/xai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: body
-    })
+    // Vite dev server typically runs on 5173, serve . on 3000
+    return window.location.port === '5173' || window.location.port === '5174'
   } catch (e) {
-    response = await fetch('https://api.x.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: body
-    })
+    return false
   }
+}
+
+// Helper: try fetching through a CORS proxy
+const fetchViaCorsProxy = async (targetUrl, options) => {
+  const CORS_PROXIES = [
+    (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+    (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  ]
+
+  let lastError
+  for (const proxyFn of CORS_PROXIES) {
+    try {
+      const proxyUrl = proxyFn(targetUrl)
+      console.log(`Trying CORS proxy: ${proxyUrl.split('?')[0]}...`)
+      const response = await fetch(proxyUrl, options)
+      // Check if we got a valid JSON response (not an HTML error page)
+      const contentType = response.headers.get('content-type') || ''
+      if (contentType.includes('text/html')) {
+        console.log('CORS proxy returned HTML, trying next...')
+        continue
+      }
+      return response
+    } catch (e) {
+      console.log(`CORS proxy failed: ${e.message}`)
+      lastError = e
+    }
+  }
+
+  // Last resort: direct call (will likely fail with CORS in browser, but try anyway)
+  console.log('All CORS proxies failed, trying direct call...')
+  return fetch(targetUrl, options)
+}
+
+// Call xAI Grok API
+// xAI API supports CORS natively (access-control-allow-origin: *) - direct browser calls work
+const callGrokAPI = async (prompt, apiKey) => {
+  console.log('Calling Grok API (direct - xAI supports CORS)...')
+
+  const response = await fetch('https://api.x.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: 'grok-3-mini',
+      messages: [
+        { role: 'system', content: 'You are a quantitative trading analyst. Always respond with valid JSON only.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.7,
+      max_tokens: 2048
+    })
+  })
 
   if (!response.ok) {
     let errorMsg = `Grok API error: ${response.status}`
@@ -453,35 +494,70 @@ const callGrokAPI = async (prompt, apiKey) => {
   return data.choices[0].message.content
 }
 
+// AI provider display names
+const AI_PROVIDER_NAMES = {
+  anthropic: 'Claude Sonnet 4',
+  google: 'Gemini 2.5 Flash',
+  openai: 'GPT-4',
+  xai: 'Grok 3'
+}
+
 // Main function to generate trades from prompt using AI
-export const generateTradesFromPrompt = async (prompt, settings, numResults = 3) => {
-  console.log('Generating trades with AI...')
-  console.log('Prompt:', prompt.name)
+// onPipelineEvent: optional callback (event, currentStep) => void for real-time pipeline tracking
+export const generateTradesFromPrompt = async (prompt, settings, numResults = 3, onPipelineEvent = null) => {
+  // Create pipeline emitter (no-op if no callback)
+  const emitter = onPipelineEvent
+    ? createPipelineEmitter(onPipelineEvent)
+    : { emit: () => {}, getElapsed: () => 0 }
+
+  const hashes = {}
+
+  // STEP: START
+  emitter.emit(PIPELINE_STEPS.START, 'completed', 'Pipeline iniciado', {
+    promptName: prompt.name,
+    numResults
+  })
 
   // Use the AI provider from the prompt (selected in modal) or fall back to settings
   const aiProvider = prompt.aiModel || settings.aiProvider || 'google'
-  console.log('AI Provider:', aiProvider)
+  const providerName = AI_PROVIDER_NAMES[aiProvider] || aiProvider
 
   // Check for API key using the correct provider
   const apiKey = settings.apiKeys?.[aiProvider]
 
   if (!apiKey) {
+    emitter.emit(PIPELINE_STEPS.ERROR, 'error', `No API key configured for ${aiProvider}`)
     throw new Error(`No API key configured for ${aiProvider}. Please add your API key in Settings.`)
   }
+
+  // STEP: FETCH PRICES
+  emitter.emit(PIPELINE_STEPS.FETCH_PRICES, 'started', 'Solicitando precios a Binance...')
 
   // Select random assets
   const shuffledAssets = [...CRYPTO_ASSETS].sort(() => Math.random() - 0.5)
   const selectedAssets = shuffledAssets.slice(0, Math.min(numResults * 2, 10))
 
-  // Fetch real prices from Binance
-  console.log('Fetching real prices from Binance for:', selectedAssets)
   const realPrices = await fetchRealPrices(selectedAssets)
 
   if (!realPrices || Object.keys(realPrices).length === 0) {
+    emitter.emit(PIPELINE_STEPS.FETCH_PRICES, 'error', 'No se pudieron obtener precios de Binance')
     throw new Error('Failed to fetch real-time prices from Binance. Please try again.')
   }
 
-  console.log('Real prices fetched:', realPrices)
+  // Generate hash for price data integrity
+  hashes.pricesInput = await generateHash(realPrices)
+
+  const priceEntries = Object.entries(realPrices)
+  const pricesSummary = priceEntries
+    .map(([asset, price]) => `${asset}: $${price.toLocaleString()}`)
+    .join(' | ')
+
+  emitter.emit(PIPELINE_STEPS.FETCH_PRICES, 'completed', `Recibidos ${priceEntries.length} pares`, {
+    count: priceEntries.length,
+    prices: realPrices,
+    pricesSummary,
+    hash: hashes.pricesInput
+  })
 
   // Prepare config
   const config = {
@@ -495,11 +571,31 @@ export const generateTradesFromPrompt = async (prompt, settings, numResults = 3)
     numResults: numResults
   }
 
-  // Build prompt for AI
-  const aiPrompt = buildAIPrompt(prompt, settings, realPrices, config)
-  console.log('AI Prompt built, calling API...')
+  // STEP: BUILD PROMPT
+  emitter.emit(PIPELINE_STEPS.BUILD_PROMPT, 'started', 'Construyendo prompt...')
 
-  // Call appropriate AI API based on the selected provider
+  const aiPrompt = buildAIPrompt(prompt, settings, realPrices, config)
+  const promptTokenEstimate = Math.round(aiPrompt.length / 4) // Rough token estimate
+
+  hashes.promptSent = await generateHash(aiPrompt)
+
+  emitter.emit(PIPELINE_STEPS.BUILD_PROMPT, 'completed', `Prompt construido (${promptTokenEstimate} tokens est.)`, {
+    tokenEstimate: promptTokenEstimate,
+    promptLength: aiPrompt.length,
+    strategy: prompt.name,
+    capital: config.capital,
+    leverage: config.leverage,
+    hash: hashes.promptSent
+  })
+
+  // STEP: AI CALL
+  emitter.emit(PIPELINE_STEPS.AI_CALL, 'started', `Enviando a ${providerName}...`, {
+    provider: aiProvider,
+    providerName,
+    temperature: 0.7,
+    maxTokens: aiProvider === 'anthropic' || aiProvider === 'openai' ? 4096 : 2048
+  })
+
   let aiResponse
   try {
     switch (aiProvider) {
@@ -507,7 +603,7 @@ export const generateTradesFromPrompt = async (prompt, settings, numResults = 3)
         aiResponse = await callClaudeAPI(aiPrompt, apiKey, 'claude-sonnet-4-20250514')
         break
       case 'google':
-        aiResponse = await callGeminiAPI(aiPrompt, apiKey, 'gemini-1.5-flash')
+        aiResponse = await callGeminiAPI(aiPrompt, apiKey, 'gemini-2.5-flash')
         break
       case 'openai':
         aiResponse = await callOpenAIAPI(aiPrompt, apiKey, 'gpt-4')
@@ -516,37 +612,117 @@ export const generateTradesFromPrompt = async (prompt, settings, numResults = 3)
         aiResponse = await callGrokAPI(aiPrompt, apiKey)
         break
       default:
+        emitter.emit(PIPELINE_STEPS.ERROR, 'error', `Proveedor desconocido: ${aiProvider}`)
         throw new Error(`Unknown AI provider: ${aiProvider}`)
     }
   } catch (error) {
-    console.error('AI API call failed:', error)
+    emitter.emit(PIPELINE_STEPS.AI_CALL, 'error', `Llamada a ${providerName} fallida: ${error.message}`)
     throw new Error(`AI API call failed: ${error.message}`)
   }
 
-  console.log('AI Response received:', aiResponse.substring(0, 200) + '...')
+  // STEP: AI RESPONSE
+  hashes.aiResponseRaw = await generateHash(aiResponse)
+  const responseTokenEstimate = Math.round(aiResponse.length / 4)
 
-  // Parse the response
-  const trades = parseAIResponse(aiResponse, realPrices, config)
+  emitter.emit(PIPELINE_STEPS.AI_RESPONSE, 'completed', `Respuesta recibida de ${providerName}`, {
+    responseLength: aiResponse.length,
+    responseTokenEstimate,
+    durationMs: emitter.getElapsed(),
+    hash: hashes.aiResponseRaw
+  })
+
+  // STEP: PARSE TRADES
+  // Re-fetch fresh prices to validate against current data (not stale prices from pipeline start)
+  let pricesToUse = realPrices
+  try {
+    const freshPrices = await fetchRealPrices(Object.keys(realPrices))
+    if (freshPrices && Object.keys(freshPrices).length > 0) {
+      pricesToUse = freshPrices
+      emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'started', 'Precios refrescados para validacion')
+    } else {
+      emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'started', 'Usando precios originales (re-fetch sin datos)')
+    }
+  } catch (priceErr) {
+    console.warn('Price re-fetch failed, using original prices:', priceErr.message)
+    emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'started', 'Usando precios originales (re-fetch fallido)')
+  }
+
+  const trades = parseAIResponse(aiResponse, pricesToUse, config)
 
   if (trades.length === 0) {
+    emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'error', 'La IA no genero trades validos')
     throw new Error('AI did not generate any valid trades. Please try again.')
   }
 
-  // Filter by minimum IPE
-  const filteredTrades = trades.filter(t => t.ipe >= (prompt.minIpe || 70))
+  const tradeAssets = trades.map(t => `${t.asset} ${t.strategy}`).join(', ')
+
+  emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'completed', `${trades.length} trades extraidos`, {
+    count: trades.length,
+    trades: tradeAssets
+  })
+
+  // STEP: FILTER IPE
+  const minIpe = prompt.minIpe || 70
+  emitter.emit(PIPELINE_STEPS.FILTER_IPE, 'started', `Filtrando por IPE >= ${minIpe}...`)
+
+  const filteredTrades = trades.filter(t => t.ipe >= minIpe)
+  const discardedTrades = trades.filter(t => t.ipe < minIpe)
 
   if (filteredTrades.length === 0) {
+    const discardedInfo = discardedTrades
+      .map(t => `${t.asset} (IPE:${t.ipe})`)
+      .join(', ')
+    emitter.emit(PIPELINE_STEPS.FILTER_IPE, 'error', `Ningun trade supera IPE ${minIpe}: ${discardedInfo}`)
     throw new Error('No trades met the minimum IPE threshold. Try lowering the minimum IPE.')
   }
 
-  console.log(`Generated ${filteredTrades.length} trades from AI`)
+  const discardedInfo = discardedTrades.length > 0
+    ? discardedTrades.map(t => `${t.asset} (IPE:${t.ipe})`).join(', ')
+    : null
 
-  // Add the full AI prompt to the trades metadata (will be saved in egg)
+  emitter.emit(PIPELINE_STEPS.FILTER_IPE, 'completed', `${filteredTrades.length}/${trades.length} trades superan umbral`, {
+    accepted: filteredTrades.length,
+    discarded: discardedTrades.length,
+    discardedInfo,
+    minIpe
+  })
+
+  // STEP: VALIDATE R:R
+  emitter.emit(PIPELINE_STEPS.VALIDATE_RR, 'started', 'Verificando Risk:Reward...')
+
+  const rrResults = filteredTrades.map(t => ({
+    asset: t.asset,
+    rr: t.riskRewardRatio,
+    valid: parseFloat(t.riskRewardRatio) >= MIN_RISK_REWARD_RATIO
+  }))
+  const rrSummary = rrResults
+    .map(r => `${r.asset}: R:R ${r.rr}:1 ${r.valid ? 'OK' : 'WARN'}`)
+    .join(' | ')
+
+  emitter.emit(PIPELINE_STEPS.VALIDATE_RR, 'completed', `Risk:Reward verificado`, {
+    results: rrResults,
+    summary: rrSummary
+  })
+
+  // Final trades
   const tradesWithPrompt = filteredTrades.slice(0, numResults).map((trade, idx) => ({
     ...trade,
-    // Only attach full prompt to first trade to avoid duplication
     ...(idx === 0 ? { fullAIPrompt: aiPrompt } : {})
   }))
+
+  // Generate hash for final output
+  hashes.tradesOutput = await generateHash(tradesWithPrompt)
+
+  // STEP: COMPLETE
+  const totalDuration = emitter.getElapsed()
+  emitter.emit(PIPELINE_STEPS.COMPLETE, 'completed', `Pipeline completado (${(totalDuration / 1000).toFixed(1)}s)`, {
+    totalTrades: tradesWithPrompt.length,
+    totalDurationMs: totalDuration,
+    hashes
+  })
+
+  // Attach hashes and execution metadata to result
+  tradesWithPrompt._executionHashes = hashes
 
   return tradesWithPrompt
 }
@@ -611,7 +787,7 @@ export const testAPIConnection = async (providerId, apiKey) => {
       case 'google': {
         // Gemini supports direct browser calls
         const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -630,33 +806,42 @@ export const testAPIConnection = async (providerId, apiKey) => {
       }
 
       case 'openai': {
-        // OpenAI - try proxy first, then direct
+        const openaiHeaders = {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        }
+        const openaiBody = JSON.stringify({
+          model: 'gpt-3.5-turbo',
+          max_tokens: 10,
+          messages: [{ role: 'user', content: 'Hi' }]
+        })
+        const OPENAI_TEST_URL = 'https://api.openai.com/v1/chat/completions'
+
         let response
-        try {
-          response = await fetch('/api/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-              model: 'gpt-3.5-turbo',
-              max_tokens: 10,
-              messages: [{ role: 'user', content: 'Hi' }]
+
+        if (isViteDevServer()) {
+          try {
+            response = await fetch('/api/openai/v1/chat/completions', {
+              method: 'POST',
+              headers: openaiHeaders,
+              body: openaiBody
             })
-          })
-        } catch (e) {
-          response = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-              model: 'gpt-3.5-turbo',
-              max_tokens: 10,
-              messages: [{ role: 'user', content: 'Hi' }]
+            const ct = response.headers.get('content-type') || ''
+            if (!ct.includes('application/json')) {
+              throw new Error('Proxy returned non-JSON')
+            }
+          } catch (e) {
+            response = await fetchViaCorsProxy(OPENAI_TEST_URL, {
+              method: 'POST',
+              headers: openaiHeaders,
+              body: openaiBody
             })
+          }
+        } else {
+          response = await fetchViaCorsProxy(OPENAI_TEST_URL, {
+            method: 'POST',
+            headers: openaiHeaders,
+            body: openaiBody
           })
         }
 
@@ -668,35 +853,19 @@ export const testAPIConnection = async (providerId, apiKey) => {
       }
 
       case 'xai': {
-        // xAI - try proxy first, then direct
-        let response
-        try {
-          response = await fetch('/api/xai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-              model: 'grok-beta',
-              max_tokens: 10,
-              messages: [{ role: 'user', content: 'Hi' }]
-            })
+        // xAI API supports CORS natively - direct browser call
+        const response = await fetch('https://api.x.ai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: 'grok-3-mini',
+            max_tokens: 10,
+            messages: [{ role: 'user', content: 'Hi' }]
           })
-        } catch (e) {
-          response = await fetch('https://api.x.ai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-              model: 'grok-beta',
-              max_tokens: 10,
-              messages: [{ role: 'user', content: 'Hi' }]
-            })
-          })
-        }
+        })
 
         if (!response.ok) {
           const error = await response.json().catch(() => ({}))

@@ -4,6 +4,7 @@ export default function EggIcon({
   size = 48,
   status = 'incubating',
   winRate = 0,
+  isHealthCheck = false,
   className = ''
 }) {
   const getEggColor = () => {
@@ -115,6 +116,21 @@ export default function EggIcon({
           <motion.circle cx="70" cy="35" r="1.5" fill={color} opacity="0.6"
             initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.7 }} />
         </motion.g>
+
+        {/* Health check badge */}
+        {isHealthCheck && (
+          <g>
+            <circle cx="72" cy="75" r="12" fill="#0a0e17" stroke="#10b981" strokeWidth="2" />
+            <path
+              d="M 64 75 L 68 75 L 70 70 L 74 80 L 76 72 L 78 75 L 80 75"
+              fill="none"
+              stroke="#10b981"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </g>
+        )}
       </motion.svg>
     )
   }
@@ -197,6 +213,21 @@ export default function EggIcon({
           {/* Center dot */}
           <circle cx="50" cy="55" r="2" fill={color} />
         </motion.g>
+
+        {/* Health check badge */}
+        {isHealthCheck && (
+          <g>
+            <circle cx="72" cy="28" r="12" fill="#0a0e17" stroke="#f97316" strokeWidth="2" />
+            <path
+              d="M 64 28 L 68 28 L 70 23 L 74 33 L 76 25 L 78 28 L 80 28"
+              fill="none"
+              stroke="#f97316"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </g>
+        )}
       </motion.svg>
     )
   }
@@ -279,6 +310,26 @@ export default function EggIcon({
         animate={{ scale: 1.2, opacity: 0 }}
         transition={{ duration: 1.5, repeat: Infinity, ease: 'easeOut' }}
       />
+
+      {/* Health check badge */}
+      {isHealthCheck && (
+        <g>
+          {/* Badge circle */}
+          <circle cx="72" cy="28" r="14" fill="#0a0e17" stroke="#10b981" strokeWidth="2" />
+          {/* Heartbeat line */}
+          <motion.path
+            d="M 62 28 L 66 28 L 68 22 L 72 34 L 74 24 L 76 28 L 82 28"
+            fill="none"
+            stroke="#10b981"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            initial={{ pathLength: 0 }}
+            animate={{ pathLength: 1 }}
+            transition={{ duration: 0.8, delay: 0.3 }}
+          />
+        </g>
+      )}
     </motion.svg>
   )
 }

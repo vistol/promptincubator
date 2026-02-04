@@ -18,6 +18,8 @@ import {
   repairEggsData
 } from '../lib/supabase'
 import { generateTradesFromPrompt } from '../lib/aiService'
+import { createExecutionLog, calculateExecutionSummary } from '../lib/executionLog'
+import { classifyError, createRunLogEntry, createRunEvent, trimRunLog, getModelDisplayName } from '../lib/healthCheckUtils'
 import {
   fetchPrices,
   fetchBinance24hStats,
@@ -213,15 +215,49 @@ const useStore = create(
       isGeneratingTrades: false,
       generationError: null,
 
+      // Execution pipeline log (real-time tracking)
+      currentExecutionLog: null,
+      pipelineEvents: [],
+      pipelineCurrentStep: null,
+
       // Generate trades from prompt using AI
       generateTrades: async (prompt) => {
-        set({ isGeneratingTrades: true, generationError: null, pendingTrades: [] })
-
         const numResults = prompt.numResults || 3
+
+        // Create execution log
+        const executionLog = createExecutionLog(prompt.name, {
+          capital: prompt.capital || 1000,
+          leverage: prompt.leverage || 5,
+          executionTime: prompt.executionTime || 'target',
+          aiModel: prompt.aiModel || 'google',
+          minIpe: prompt.minIpe || 80,
+          numResults
+        })
+
+        set({
+          isGeneratingTrades: true,
+          generationError: null,
+          pendingTrades: [],
+          currentExecutionLog: executionLog,
+          pipelineEvents: [],
+          pipelineCurrentStep: 'start'
+        })
+
         get().addLog('ai', `Generating ${numResults} trades using "${prompt.name}"...`)
 
+        // Pipeline event handler - updates state in real-time
+        const onPipelineEvent = (event, currentStep) => {
+          set((state) => ({
+            pipelineEvents: [...state.pipelineEvents, event],
+            pipelineCurrentStep: currentStep,
+            currentExecutionLog: state.currentExecutionLog
+              ? { ...state.currentExecutionLog, currentStep, events: [...state.currentExecutionLog.events, event] }
+              : null
+          }))
+        }
+
         try {
-          const trades = await generateTradesFromPrompt(prompt, get().settings, numResults)
+          const trades = await generateTradesFromPrompt(prompt, get().settings, numResults, onPipelineEvent)
 
           // Log each generated trade
           trades.forEach(trade => {
@@ -230,17 +266,35 @@ const useStore = create(
 
           get().addLog('ai', `AI generated ${trades.length} trade signals`)
 
+          // Finalize execution log
+          const finalLog = {
+            ...get().currentExecutionLog,
+            status: 'completed',
+            completedAt: new Date().toISOString(),
+            hashes: trades._executionHashes || {}
+          }
+          finalLog.summary = calculateExecutionSummary(finalLog)
+
           set({
             pendingTrades: trades,
-            isGeneratingTrades: false
+            isGeneratingTrades: false,
+            currentExecutionLog: finalLog
           })
 
           return { success: true, trades }
         } catch (error) {
           get().addLog('error', `AI generation failed: ${error.message}`)
+
+          // Mark execution log as error
+          const errorLog = get().currentExecutionLog
+            ? { ...get().currentExecutionLog, status: 'error', completedAt: new Date().toISOString() }
+            : null
+          if (errorLog) errorLog.summary = calculateExecutionSummary(errorLog)
+
           set({
             isGeneratingTrades: false,
-            generationError: error.message
+            generationError: error.message,
+            currentExecutionLog: errorLog
           })
           return { success: false, error: error.message }
         }
@@ -322,10 +376,20 @@ const useStore = create(
           targetPct: prompt.targetPct || 10 // Default to 10% instead of null
         }
 
+        // Attach the execution log from the generation pipeline
+        const executionLog = get().currentExecutionLog || null
+
         // Create the egg with all prompt configuration
         const egg = {
           id: `egg-${Date.now()}`,
           promptId: prompt.id || `prompt-${Date.now()}`,
+          healthCheckId: prompt.healthCheckId || (() => {
+            // Auto-detect: find health check that contains this prompt
+            const hc = state.healthChecks?.find(hc =>
+              hc.prompts?.some(p => p.id === (prompt.id || ''))
+            )
+            return hc?.id || null
+          })(),
           promptName: promptName,
           promptContent: promptContentDisplay,
           fullAIPrompt: fullAIPrompt, // Store the complete prompt sent to AI (validated)
@@ -340,7 +404,9 @@ const useStore = create(
             : null,
           createdAt: new Date().toISOString(),
           hatchedAt: null,
-          results: null
+          results: null,
+          // Glass Box Pipeline - execution log for transparency
+          executionLog: executionLog
         }
 
         set((state) => ({
@@ -632,7 +698,8 @@ const useStore = create(
       // Settings
       settings: {
         aiProvider: 'google',
-        aiModel: 'gemini-1.5-flash',
+        aiModel: 'gemini-2.5-flash',
+        gracePeriodMinutes: 5, // Warmup before TP/SL can close trades
         apiKeys: {
           anthropic: '',
           google: '',
@@ -923,22 +990,35 @@ If no truly new strategy can be generated, you must invent a new angle rather th
             pnlPercent: tradeStatus.pnlPercent
           })
 
-          // First price update - activate the trade but don't close it yet
-          if (!signal.priceActivated) {
-            activatedTrades.push({
-              asset: signal.asset,
-              strategy: signal.strategy,
-              price: currentPrice,
-              entry,
-              tp,
-              sl
-            })
+          // Grace period: protect trades from closing too early after egg creation
+          // Use the EGG's createdAt (when incubation started), not the signal's createdAt
+          // (which is set during AI generation, potentially minutes before the egg is created)
+          const gracePeriodMs = (state.settings.gracePeriodMinutes ?? 5) * 60 * 1000
+          const parentEgg = eggs.find(e => e.trades && e.trades.includes(signal.id))
+          const eggCreatedAt = parentEgg?.createdAt ? new Date(parentEgg.createdAt).getTime() : 0
+          const eggAge = eggCreatedAt ? Date.now() - eggCreatedAt : Infinity
+          const inGracePeriod = eggCreatedAt > 0 && eggAge < gracePeriodMs
+
+          if (inGracePeriod) {
+            const gracePeriodEndsAt = new Date(eggCreatedAt + gracePeriodMs).toISOString()
+            if (!signal.priceActivated) {
+              activatedTrades.push({
+                asset: signal.asset,
+                strategy: signal.strategy,
+                price: currentPrice,
+                entry,
+                tp,
+                sl,
+                gracePeriodEndsAt
+              })
+            }
             return {
               ...signal,
               priceActivated: true,
-              activatedPrice: currentPrice,
+              activatedPrice: signal.activatedPrice || currentPrice,
               currentPrice,
-              unrealizedPnl: tradeStatus.pnlPercent
+              unrealizedPnl: tradeStatus.pnlPercent,
+              gracePeriodEndsAt
             }
           }
 
@@ -1010,6 +1090,14 @@ If no truly new strategy can be generated, you must invent a new angle rather th
             }
           }
         })
+
+        // Grace period log
+        const inGracePeriodCount = updatedSignals.filter(s =>
+          s.status === 'active' && s.gracePeriodEndsAt && new Date(s.gracePeriodEndsAt) > new Date()
+        ).length
+        if (inGracePeriodCount > 0) {
+          get().addLog('trade', `${inGracePeriodCount} trade(s) en warmup (grace period)`)
+        }
 
         // Summary log
         const stillActive = updatedSignals.filter(s => s.status === 'active').length
@@ -1128,7 +1216,11 @@ If no truly new strategy can be generated, you must invent a new angle rather th
 
       // Health Checks (batch presets)
       healthChecks: [],
+      activeHealthCheckId: null, // tracks which health check is currently being executed
       showHealthCheckModal: false,
+      healthCheckRunning: null,        // ID of health check currently executing
+      healthCheckProgress: null,       // {current, total, currentVariation, errors}
+      healthCheckError: null,          // Error message if run fails
       addHealthCheck: (healthCheck) => {
         set((state) => ({
           healthChecks: [...state.healthChecks, healthCheck]
@@ -1156,6 +1248,466 @@ If no truly new strategy can be generated, you must invent a new angle rather th
       setHealthChecks: (healthChecks) => {
         set({ healthChecks })
         get().triggerSync()
+      },
+
+      // Create egg directly from trades (used by runHealthCheck, bypasses pendingTrades)
+      // healthCheckMeta: { presetName } — optional metadata from the health check for formatting
+      createEggDirect: (prompt, trades, healthCheckId, variation = null, healthCheckMeta = null) => {
+        if (!trades || trades.length === 0) return null
+
+        let fullAIPrompt = trades[0]?.fullAIPrompt || null
+        if (!fullAIPrompt || fullAIPrompt.trim() === '') {
+          const assets = trades.map(t => t.asset).join(', ')
+          fullAIPrompt = `[Health Check Auto-Run]\n\nStrategy: ${prompt.name || 'Unknown'}\nAssets: ${assets}\nCapital: $${prompt.capital || 1000}\nLeverage: ${prompt.leverage || 5}x`
+        }
+
+        const newSignals = trades.map(t => {
+          const { fullAIPrompt: _, ...tradeWithoutPrompt } = t
+          return { ...tradeWithoutPrompt, status: 'active', selected: undefined }
+        })
+
+        const basePromptName = prompt.name || 'Unnamed Strategy'
+        const promptExecution = prompt.executionTime || 'target'
+
+        // Format egg title: PROMPT + BATCH PRESET NAME + DATE/TIME
+        const now = new Date()
+        const dateStr = now.toLocaleDateString()
+        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        const presetName = healthCheckMeta?.presetName || null
+        const promptName = presetName
+          ? `${basePromptName} | ${presetName} | ${dateStr} ${timeStr}`
+          : basePromptName
+
+        const validatedConfig = {
+          capital: prompt.capital || 1000,
+          leverage: prompt.leverage || 5,
+          executionTime: promptExecution,
+          aiModel: prompt.aiModel || 'gemini',
+          aiProvider: prompt.aiModel || 'google',
+          minIpe: prompt.minIpe || 80,
+          numResults: prompt.numResults || 3,
+          mode: prompt.mode || 'auto',
+          targetPct: prompt.targetPct || 10
+        }
+
+        const egg = {
+          id: `egg-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+          promptId: prompt.id || `prompt-${Date.now()}`,
+          healthCheckId: healthCheckId,
+          promptName: promptName,
+          promptContent: prompt.content || `Health Check: ${basePromptName}`,
+          fullAIPrompt: fullAIPrompt,
+          status: 'incubating',
+          isHealthCheck: true, // Flag for health-themed egg icon
+          trades: newSignals.map(s => s.id),
+          totalCapital: trades.reduce((sum, t) => sum + (t.capital || 0), 0),
+          config: validatedConfig,
+          variation: variation || null, // Store the variation that produced this egg
+          executionTime: promptExecution,
+          expiresAt: EXECUTION_LIMITS[prompt.executionTime]
+            ? new Date(Date.now() + EXECUTION_LIMITS[prompt.executionTime]).toISOString()
+            : null,
+          createdAt: new Date().toISOString(),
+          hatchedAt: null,
+          results: null,
+          executionLog: null
+        }
+
+        set((state) => ({
+          signals: [...newSignals, ...state.signals],
+          eggs: [egg, ...state.eggs]
+        }))
+
+        const assets = newSignals.map(s => s.asset).join(', ')
+        get().addLog('egg', `Health check egg: "${promptName}" with ${newSignals.length} trades`, {
+          eggId: egg.id, trades: newSignals.length, assets, capital: egg.totalCapital
+        })
+
+        get().triggerSync()
+        return egg
+      },
+
+      // Run health check: iterate variations, generate trades, create eggs
+      runHealthCheck: async (checkId) => {
+        const state = get()
+        const check = state.healthChecks.find(hc => hc.id === checkId)
+        if (!check) return { success: false, error: 'Health check not found' }
+        if (!check.variations?.length) return { success: false, error: 'No variations configured' }
+        if (!check.prompts?.length) return { success: false, error: 'No prompts selected' }
+        if (state.healthCheckRunning) return { success: false, error: 'Another health check is running' }
+
+        const basePrompt = state.prompts.find(p => p.id === check.prompts[0].id)
+        if (!basePrompt) return { success: false, error: 'Prompt not found in library' }
+
+        // Pre-filter variations: skip those requiring an AI model without an API key
+        const defaultAiModel = basePrompt.aiModel || state.settings.aiProvider || 'google'
+        const availableKeys = state.settings.apiKeys || {}
+        const skippedVariations = []
+
+        const runnableVariations = check.variations.filter((variation) => {
+          const aiModel = variation.aiModel || defaultAiModel
+          if (!availableKeys[aiModel]) {
+            const label = Object.entries(variation).map(([k, v]) => `${k}:${v}`).join(' ')
+            skippedVariations.push({ label, aiModel, variation })
+            return false
+          }
+          return true
+        })
+
+        // Initialize persistent run log entry
+        const runLogEntry = createRunLogEntry(check.variations.length)
+        runLogEntry.summary.attempted = runnableVariations.length
+        runLogEntry.summary.skipped = skippedVariations.length
+
+        // Record skipped variations as events
+        skippedVariations.forEach((sv) => {
+          const classified = classifyError(`No API key configured for ${sv.aiModel}`, sv.aiModel)
+          runLogEntry.events.push(createRunEvent(-1, sv.variation, 'skipped', {
+            skipReason: `No API key for ${getModelDisplayName(sv.aiModel)}`,
+            errorType: classified.errorType,
+            suggestion: classified.suggestion
+          }))
+        })
+
+        if (runnableVariations.length === 0) {
+          const missingModels = [...new Set(skippedVariations.map(s => s.aiModel))].join(', ')
+
+          // Finalize and persist the run log even on abort
+          runLogEntry.completedAt = new Date().toISOString()
+          runLogEntry.durationMs = 0
+          const existingRunLog = check.runLog || []
+          const updatedRunLog = trimRunLog([runLogEntry, ...existingRunLog])
+          get().updateHealthCheck(checkId, { runLog: updatedRunLog })
+
+          set({ healthCheckError: `No API keys configured for: ${missingModels}` })
+          get().addLog('error', `Health check "${check.name}" aborted: no API keys for ${missingModels}`)
+          return { success: false, error: `No API keys configured for: ${missingModels}` }
+        }
+
+        const total = runnableVariations.length
+        const skippedCount = skippedVariations.length
+        set({
+          healthCheckRunning: checkId,
+          healthCheckProgress: { current: 0, total, currentVariation: null, errors: [], skipped: skippedCount, liveRunLog: runLogEntry },
+          healthCheckError: null
+        })
+
+        if (skippedCount > 0) {
+          const missingModels = [...new Set(skippedVariations.map(s => s.aiModel))].join(', ')
+          get().addLog('system', `Health check "${check.name}": skipping ${skippedCount} variation(s) — no API key for: ${missingModels}`)
+        }
+        get().addLog('system', `Running health check "${check.name}" with ${total} variation(s)${skippedCount > 0 ? ` (${skippedCount} skipped)` : ''}...`)
+
+        let successCount = 0
+        const errors = []
+
+        for (let i = 0; i < runnableVariations.length; i++) {
+          const variation = runnableVariations[i]
+          const variationLabel = Object.entries(variation).map(([k, v]) => `${k}:${v}`).join(' ')
+          const variationStart = Date.now()
+
+          set({
+            healthCheckProgress: { current: i, total, currentVariation: variationLabel, errors, skipped: skippedCount, liveRunLog: runLogEntry }
+          })
+
+          // Merge base prompt with variation overrides
+          const mergedPrompt = {
+            ...basePrompt,
+            capital: check.capital || basePrompt.capital || 1000,
+            ...variation,
+            healthCheckId: checkId
+          }
+
+          // Determine AI provider from variation or base
+          const aiModel = variation.aiModel || defaultAiModel
+          const mergedSettings = { ...state.settings, aiProvider: aiModel }
+          const numResults = variation.numResults || basePrompt.numResults || 3
+
+          try {
+            get().addLog('ai', `[HC ${i + 1}/${total}] Generating: ${variationLabel}`)
+
+            const trades = await generateTradesFromPrompt(mergedPrompt, mergedSettings, numResults, () => {})
+
+            if (trades && trades.length > 0) {
+              const egg = get().createEggDirect(mergedPrompt, trades, checkId, variation, {
+                presetName: check.preset?.name || check.name || 'Health Check'
+              })
+              successCount++
+
+              // Record success event in run log
+              runLogEntry.events.push(createRunEvent(i, variation, 'success', {
+                durationMs: Date.now() - variationStart,
+                eggId: egg?.id || null,
+                tradesGenerated: trades.length
+              }))
+              runLogEntry.summary.succeeded++
+              runLogEntry.summary.eggsCreated++
+              runLogEntry.summary.totalTradesGenerated += trades.length
+
+              get().addLog('ai', `[HC ${i + 1}/${total}] Created egg with ${trades.length} trades`)
+            } else {
+              const errMsg = `No valid trades generated for ${variationLabel}`
+              errors.push(errMsg)
+
+              // Record failure event in run log
+              const classified = classifyError(errMsg, aiModel)
+              runLogEntry.events.push(createRunEvent(i, variation, 'failed', {
+                durationMs: Date.now() - variationStart,
+                error: errMsg,
+                errorType: classified.errorType,
+                suggestion: classified.suggestion
+              }))
+              runLogEntry.summary.failed++
+
+              get().addLog('error', `[HC ${i + 1}/${total}] ${errMsg}`)
+            }
+          } catch (err) {
+            const errMsg = `${variationLabel}: ${err.message}`
+            errors.push(errMsg)
+
+            // Record failure event in run log with classification
+            const classified = classifyError(err.message, aiModel)
+            runLogEntry.events.push(createRunEvent(i, variation, 'failed', {
+              durationMs: Date.now() - variationStart,
+              error: err.message,
+              errorType: classified.errorType,
+              suggestion: classified.suggestion
+            }))
+            runLogEntry.summary.failed++
+
+            get().addLog('error', `[HC ${i + 1}/${total}] Failed: ${err.message}`)
+          }
+
+          // Update live progress with current run log state
+          set({
+            healthCheckProgress: { current: i + 1, total, currentVariation: variationLabel, errors, skipped: skippedCount, liveRunLog: { ...runLogEntry } }
+          })
+
+          // Small delay between variations to avoid rate limiting
+          if (i < runnableVariations.length - 1) {
+            await new Promise(r => setTimeout(r, 1000))
+          }
+        }
+
+        // Finalize run log entry
+        runLogEntry.completedAt = new Date().toISOString()
+        runLogEntry.durationMs = new Date(runLogEntry.completedAt).getTime() - new Date(runLogEntry.startedAt).getTime()
+
+        // Persist run log on the health check (trimmed to 20 entries)
+        const existingRunLog = check.runLog || []
+        const updatedRunLog = trimRunLog([runLogEntry, ...existingRunLog])
+
+        get().updateHealthCheck(checkId, {
+          lastRun: new Date().toISOString(),
+          runLog: updatedRunLog
+        })
+
+        const errorSummary = []
+        if (errors.length > 0) errorSummary.push(`${errors.length} failed`)
+        if (skippedCount > 0) errorSummary.push(`${skippedCount} skipped (no API key)`)
+
+        set({
+          healthCheckRunning: null,
+          healthCheckProgress: null,
+          healthCheckError: errorSummary.length > 0 ? errorSummary.join(', ') : null
+        })
+
+        get().addLog('system', `Health check "${check.name}" complete: ${successCount}/${total} eggs created${errorSummary.length > 0 ? ` — ${errorSummary.join(', ')}` : ''}`)
+        get().triggerSync()
+
+        return { success: true, created: successCount, errors }
+      },
+
+      // Retry only failed/skipped variations from the last run (or specific ones)
+      // variationsToRetry: array of variation objects, or null to auto-detect from latest runLog
+      retryFailedVariations: async (checkId, variationsToRetry = null) => {
+        const state = get()
+        const check = state.healthChecks.find(hc => hc.id === checkId)
+        if (!check) return { success: false, error: 'Health check not found' }
+        if (state.healthCheckRunning) return { success: false, error: 'Another health check is running' }
+
+        const basePrompt = state.prompts.find(p => p.id === check.prompts?.[0]?.id)
+        if (!basePrompt) return { success: false, error: 'Prompt not found in library' }
+
+        // Determine which variations to retry
+        let targetVariations = variationsToRetry
+        if (!targetVariations || targetVariations.length === 0) {
+          // Auto-detect from latest run log
+          const latestRun = (check.runLog || [])[0]
+          if (!latestRun) {
+            // No previous run — fall back to full run
+            return get().runHealthCheck(checkId)
+          }
+          targetVariations = latestRun.events
+            .filter(e => e.status === 'failed' || e.status === 'skipped')
+            .map(e => e.variation)
+            .filter(v => v && Object.keys(v).length > 0)
+        }
+
+        if (targetVariations.length === 0) {
+          return { success: false, error: 'No failed variations to retry' }
+        }
+
+        // Pre-filter by API key availability
+        const defaultAiModel = basePrompt.aiModel || state.settings.aiProvider || 'google'
+        const availableKeys = state.settings.apiKeys || {}
+        const skippedVariations = []
+
+        const runnableVariations = targetVariations.filter((variation) => {
+          const aiModel = variation.aiModel || defaultAiModel
+          if (!availableKeys[aiModel]) {
+            skippedVariations.push({ label: Object.entries(variation).map(([k, v]) => `${k}:${v}`).join(' '), aiModel, variation })
+            return false
+          }
+          return true
+        })
+
+        // Initialize run log entry for this retry
+        const runLogEntry = createRunLogEntry(targetVariations.length)
+        runLogEntry.summary.attempted = runnableVariations.length
+        runLogEntry.summary.skipped = skippedVariations.length
+
+        // Record still-skipped variations
+        skippedVariations.forEach((sv) => {
+          const classified = classifyError(`No API key configured for ${sv.aiModel}`, sv.aiModel)
+          runLogEntry.events.push(createRunEvent(-1, sv.variation, 'skipped', {
+            skipReason: `No API key for ${getModelDisplayName(sv.aiModel)}`,
+            errorType: classified.errorType,
+            suggestion: classified.suggestion
+          }))
+        })
+
+        if (runnableVariations.length === 0) {
+          const missingModels = [...new Set(skippedVariations.map(s => s.aiModel))].join(', ')
+          runLogEntry.completedAt = new Date().toISOString()
+          runLogEntry.durationMs = 0
+          const existingRunLog = check.runLog || []
+          const updatedRunLog = trimRunLog([runLogEntry, ...existingRunLog])
+          get().updateHealthCheck(checkId, { runLog: updatedRunLog })
+
+          set({ healthCheckError: `No API keys configured for: ${missingModels}` })
+          get().addLog('error', `Retry "${check.name}" aborted: no API keys for ${missingModels}`)
+          return { success: false, error: `No API keys configured for: ${missingModels}` }
+        }
+
+        const total = runnableVariations.length
+        const skippedCount = skippedVariations.length
+        set({
+          healthCheckRunning: checkId,
+          healthCheckProgress: { current: 0, total, currentVariation: null, errors: [], skipped: skippedCount, liveRunLog: runLogEntry },
+          healthCheckError: null
+        })
+
+        get().addLog('system', `Retrying ${total} failed variation(s) for "${check.name}"${skippedCount > 0 ? ` (${skippedCount} still skipped)` : ''}...`)
+
+        let successCount = 0
+        const errors = []
+
+        for (let i = 0; i < runnableVariations.length; i++) {
+          const variation = runnableVariations[i]
+          const variationLabel = Object.entries(variation).map(([k, v]) => `${k}:${v}`).join(' ')
+          const variationStart = Date.now()
+
+          set({
+            healthCheckProgress: { current: i, total, currentVariation: variationLabel, errors, skipped: skippedCount, liveRunLog: runLogEntry }
+          })
+
+          const mergedPrompt = {
+            ...basePrompt,
+            capital: check.capital || basePrompt.capital || 1000,
+            ...variation,
+            healthCheckId: checkId
+          }
+
+          const aiModel = variation.aiModel || defaultAiModel
+          const mergedSettings = { ...state.settings, aiProvider: aiModel }
+          const numResults = variation.numResults || basePrompt.numResults || 3
+
+          try {
+            get().addLog('ai', `[Retry ${i + 1}/${total}] Generating: ${variationLabel}`)
+            const trades = await generateTradesFromPrompt(mergedPrompt, mergedSettings, numResults, () => {})
+
+            if (trades && trades.length > 0) {
+              const egg = get().createEggDirect(mergedPrompt, trades, checkId, variation, {
+                presetName: check.preset?.name || check.name || 'Health Check'
+              })
+              successCount++
+
+              runLogEntry.events.push(createRunEvent(i, variation, 'success', {
+                durationMs: Date.now() - variationStart,
+                eggId: egg?.id || null,
+                tradesGenerated: trades.length
+              }))
+              runLogEntry.summary.succeeded++
+              runLogEntry.summary.eggsCreated++
+              runLogEntry.summary.totalTradesGenerated += trades.length
+
+              get().addLog('ai', `[Retry ${i + 1}/${total}] Created egg with ${trades.length} trades`)
+            } else {
+              const errMsg = `No valid trades generated for ${variationLabel}`
+              errors.push(errMsg)
+
+              const classified = classifyError(errMsg, aiModel)
+              runLogEntry.events.push(createRunEvent(i, variation, 'failed', {
+                durationMs: Date.now() - variationStart,
+                error: errMsg,
+                errorType: classified.errorType,
+                suggestion: classified.suggestion
+              }))
+              runLogEntry.summary.failed++
+
+              get().addLog('error', `[Retry ${i + 1}/${total}] ${errMsg}`)
+            }
+          } catch (err) {
+            const errMsg = `${variationLabel}: ${err.message}`
+            errors.push(errMsg)
+
+            const classified = classifyError(err.message, aiModel)
+            runLogEntry.events.push(createRunEvent(i, variation, 'failed', {
+              durationMs: Date.now() - variationStart,
+              error: err.message,
+              errorType: classified.errorType,
+              suggestion: classified.suggestion
+            }))
+            runLogEntry.summary.failed++
+
+            get().addLog('error', `[Retry ${i + 1}/${total}] Failed: ${err.message}`)
+          }
+
+          set({
+            healthCheckProgress: { current: i + 1, total, currentVariation: variationLabel, errors, skipped: skippedCount, liveRunLog: { ...runLogEntry } }
+          })
+
+          if (i < runnableVariations.length - 1) {
+            await new Promise(r => setTimeout(r, 1000))
+          }
+        }
+
+        // Finalize
+        runLogEntry.completedAt = new Date().toISOString()
+        runLogEntry.durationMs = new Date(runLogEntry.completedAt).getTime() - new Date(runLogEntry.startedAt).getTime()
+
+        const existingRunLog = check.runLog || []
+        const updatedRunLog = trimRunLog([runLogEntry, ...existingRunLog])
+        get().updateHealthCheck(checkId, {
+          lastRun: new Date().toISOString(),
+          runLog: updatedRunLog
+        })
+
+        const errorSummary = []
+        if (errors.length > 0) errorSummary.push(`${errors.length} failed`)
+        if (skippedCount > 0) errorSummary.push(`${skippedCount} skipped (no API key)`)
+
+        set({
+          healthCheckRunning: null,
+          healthCheckProgress: null,
+          healthCheckError: errorSummary.length > 0 ? errorSummary.join(', ') : null
+        })
+
+        get().addLog('system', `Retry "${check.name}" complete: ${successCount}/${total} eggs created${errorSummary.length > 0 ? ` — ${errorSummary.join(', ')}` : ''}`)
+        get().triggerSync()
+
+        return { success: true, created: successCount, errors }
       },
 
       // Cross-page egg navigation (from Prompts to Incubator)
@@ -1341,7 +1893,8 @@ If no truly new strategy can be generated, you must invent a new angle rather th
                 ...s.settings,
                 aiProvider: settingsResult.data.aiProvider || s.settings.aiProvider,
                 aiModel: settingsResult.data.aiModel || s.settings.aiModel,
-                systemPrompt: settingsResult.data.systemPrompt || s.settings.systemPrompt
+                systemPrompt: settingsResult.data.systemPrompt || s.settings.systemPrompt,
+                gracePeriodMinutes: settingsResult.data.gracePeriodMinutes ?? s.settings.gracePeriodMinutes
               }
             }))
           }
@@ -1432,7 +1985,8 @@ If no truly new strategy can be generated, you must invent a new angle rather th
           supabase: state.settings.supabase,
           tradingPlatform: state.settings.tradingPlatform,
           apiKeys: state.settings.apiKeys,
-          aiProvider: state.settings.aiProvider
+          aiProvider: state.settings.aiProvider,
+          gracePeriodMinutes: state.settings.gracePeriodMinutes
         }
       }),
       // Deep merge settings to preserve default values for non-persisted properties

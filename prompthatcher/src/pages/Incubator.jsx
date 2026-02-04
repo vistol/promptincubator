@@ -1,10 +1,11 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Archive, Clock, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Activity, DollarSign, Zap, Cpu, Target, Hash, Radio, Filter, ArrowUpDown, Brain, MessageSquare, CheckCircle2, XCircle, Shield, Lightbulb, HelpCircle, ScrollText, Search, Play, Sparkles, AlertTriangle, CheckCheck } from 'lucide-react'
+import { Archive, Clock, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Activity, DollarSign, Zap, Cpu, Target, Hash, Radio, Filter, ArrowUpDown, Brain, MessageSquare, CheckCircle2, XCircle, Shield, Lightbulb, HelpCircle, ScrollText, Search, Play, Sparkles, AlertTriangle, CheckCheck, GitBranch } from 'lucide-react'
 import useStore from '../store/useStore'
 import Header from '../components/Header'
 import EggIcon from '../components/EggIcon'
 import MonitoringConsole from '../components/MonitoringConsole'
+import PipelineLog from '../components/PipelineLog'
 
 // Execution time labels
 const EXECUTION_LABELS = {
@@ -135,7 +136,7 @@ export default function Incubator() {
   }, [healthChecks])
 
   // Check if an egg belongs to a health check
-  const isHealthCheckEgg = (egg) => healthCheckPromptIds.has(egg.promptId)
+  const isHealthCheckEgg = (egg) => egg.healthCheckId || healthCheckPromptIds.has(egg.promptId)
 
   // Toggle config expansion for an egg
   const toggleConfigExpand = (eggId) => {
@@ -149,6 +150,20 @@ export default function Incubator() {
 
   // Check if egg is expired
   const isEggExpired = (egg) => egg.expiresAt && new Date(egg.expiresAt) <= new Date()
+
+  // Check if a signal is in grace period (warmup)
+  const isInGracePeriod = (signal) =>
+    signal.status === 'active' && signal.gracePeriodEndsAt && new Date(signal.gracePeriodEndsAt) > new Date()
+
+  // Format grace period remaining as m:ss
+  const formatGracePeriodRemaining = (signal) => {
+    if (!signal.gracePeriodEndsAt) return null
+    const remaining = new Date(signal.gracePeriodEndsAt) - new Date()
+    if (remaining <= 0) return null
+    const min = Math.floor(remaining / 60000)
+    const sec = Math.floor((remaining % 60000) / 1000)
+    return `${min}:${sec.toString().padStart(2, '0')}`
+  }
 
   // Get current price
   const getPrice = (asset) => prices[asset]?.price || null
@@ -646,6 +661,7 @@ Configuración:
                           size={52}
                           status={isExpiredEgg ? 'expired' : egg.status}
                           winRate={results?.winRate || 0}
+                          isHealthCheck={!!egg.isHealthCheck || !!egg.healthCheckId}
                         />
                         {!isCompleted && status.active > 0 && (
                           <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-accent-green rounded-full border-2 border-quant-card animate-pulse" />
@@ -677,11 +693,19 @@ Configuración:
                             </span>
                           ) : (
                             // Active egg status
-                            <span className="text-accent-cyan">
-                              {status.active} open
-                              <span className="text-gray-500 mx-1">·</span>
-                              <span className="text-gray-400">{status.closed}/{status.total} closed</span>
-                            </span>
+                            <>
+                              <span className="text-accent-cyan">
+                                {status.active} open
+                                <span className="text-gray-500 mx-1">·</span>
+                                <span className="text-gray-400">{status.closed}/{status.total} closed</span>
+                              </span>
+                              {eggSignals.some(s => isInGracePeriod(s)) && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent-yellow/20 text-accent-yellow font-medium flex items-center gap-1">
+                                  <Shield size={9} />
+                                  WARMUP
+                                </span>
+                              )}
+                            </>
                           )}
 
                           {/* Time - only show for active eggs */}
@@ -739,6 +763,7 @@ Configuración:
                           <div className="flex border-b border-quant-border">
                             {[
                               { id: 'trades', label: 'Trades', icon: TrendingUp },
+                              { id: 'pipeline', label: 'Pipeline', icon: GitBranch },
                               { id: 'config', label: 'Config', icon: DollarSign },
                               { id: 'ai', label: 'AI Reasoning', icon: Brain },
                               { id: 'log', label: 'LOG', icon: ScrollText }
@@ -759,6 +784,11 @@ Configuración:
                           </div>
 
                           <div className="p-3 space-y-4">
+                          {/* Pipeline Section - Show when pipeline tab active */}
+                          {getActiveTab(egg.id) === 'pipeline' && (
+                            <PipelineLog executionLog={egg.executionLog} />
+                          )}
+
                           {/* Configuration Section - Show when config tab active */}
                           {getActiveTab(egg.id) === 'config' && (() => {
                             // Create fallback config for old eggs without config
@@ -883,9 +913,12 @@ Configuración:
                                 const currentPnlDollar = (currentPnlPct / 100) * lev * cap
                                 const isProfit = currentPnlPct >= 0
 
+                                const inGrace = isInGracePeriod(signal)
                                 const statusColor = isClosed
                                   ? (signal.result === 'win' ? 'bg-accent-green' : 'bg-accent-red')
-                                  : (isProfit ? 'bg-accent-green' : 'bg-accent-red')
+                                  : inGrace
+                                    ? 'bg-accent-yellow'
+                                    : (isProfit ? 'bg-accent-green' : 'bg-accent-red')
 
                                 return (
                                   <div key={signal.id}>
@@ -931,6 +964,11 @@ Configuración:
                                             <>LOSS <XCircle size={12} /></>
                                           )}
                                         </div>
+                                      ) : inGrace ? (
+                                        <div className="py-2.5 px-2 flex items-center gap-1 text-accent-yellow min-w-[85px] justify-end">
+                                          <Shield size={10} />
+                                          <span className="text-[10px] font-mono">{formatGracePeriodRemaining(signal)}</span>
+                                        </div>
                                       ) : (
                                         <div className={`py-2.5 px-2 font-mono text-sm font-bold min-w-[85px] text-right ${
                                           isProfit ? 'text-accent-green' : 'text-accent-red'
@@ -941,7 +979,7 @@ Configuración:
 
                                       {/* PnL in % */}
                                       <div className={`py-2.5 px-3 font-mono text-xs min-w-[65px] text-right ${
-                                        isProfit ? 'text-accent-green' : 'text-accent-red'
+                                        inGrace ? 'text-accent-yellow' : isProfit ? 'text-accent-green' : 'text-accent-red'
                                       }`}>
                                         {currentPnlPct >= 0 ? '+' : ''}{currentPnlPct.toFixed(2)}%
                                       </div>

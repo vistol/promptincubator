@@ -1,9 +1,9 @@
 import { motion } from 'framer-motion'
-import { Egg, Radio, Sparkles, Settings } from 'lucide-react'
+import { Egg, Radio, Wand2, Settings } from 'lucide-react'
 import useStore from '../store/useStore'
 
 const tabs = [
-  { id: 'prompts', label: 'Prompts', icon: Sparkles },
+  { id: 'prompts', label: 'Prompts', icon: Wand2 },
   { id: 'incubator', label: 'Incubator', icon: Egg },
   { id: 'signals', label: 'Signals', icon: Radio },
   { id: 'settings', label: 'Settings', icon: Settings },
