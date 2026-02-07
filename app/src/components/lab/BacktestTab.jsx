@@ -282,13 +282,20 @@ export default function BacktestTab() {
       }
 
       // Step 2: Walk-Forward Sampling — call AI at N evenly spaced historical points
+      // FIX 4: Each sample window is isolated — trades can only see data within their window
       const allTrades = []
       const step = (endTime - startTime) / samplePoints
       let successfulSamples = 0
+      const sampleBoundaries = [] // For walk-forward data isolation
 
       for (let i = 0; i < samplePoints; i++) {
-        const sampleTime = startTime + (i * step) + (step * 0.5)
+        const windowStart = startTime + (i * step)
+        const windowEnd = startTime + ((i + 1) * step)
+        const sampleTime = windowStart + (step * 0.5) // Center of window
         const sampleDate = new Date(sampleTime).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
+
+        // Record boundary for this sample window
+        sampleBoundaries.push({ start: windowStart, end: windowEnd })
 
         setRunProgress({
           phase: 'ai',
@@ -361,7 +368,8 @@ export default function BacktestTab() {
         initialCapital: selectedPrompt.capital || 1000,
         leverage: selectedPrompt.leverage || 5,
         slippage: slippage / 100,
-        takerFee: takerFee / 100
+        takerFee: takerFee / 100,
+        sampleBoundaries // FIX 4: Walk-forward isolation — trades only see data within their window
       })
 
       const successMsg = successfulSamples < samplePoints
