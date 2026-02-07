@@ -152,7 +152,7 @@ const simulateTrade = (trade, candles, config = {}) => {
   return {
     ...trade,
     adjustedEntry,
-    result: 'expired',
+    result: netPnl >= 0 ? 'win' : 'loss',
     pnlPercent: netPnl,
     pnlDollar: 0,
     exitPrice: lastPrice,

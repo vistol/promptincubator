@@ -882,7 +882,7 @@ function BacktestCard({ bt, isExpanded, onToggle, onDelete }) {
                     {r.trades.slice(0, 20).map((t, i) => (
                       <div key={i} className="flex items-center justify-between py-1 px-2 bg-quant-surface rounded-lg text-[10px]">
                         <span className="text-gray-400">{t.asset} {t.strategy}</span>
-                        <span className={`font-mono font-bold ${t.result === 'win' ? 'text-accent-green' : t.result === 'loss' ? 'text-accent-red' : 'text-gray-400'}`}>
+                        <span className={`font-mono font-bold ${(t.pnlPercent || 0) >= 0 ? 'text-accent-green' : 'text-accent-red'}`}>
                           {(t.pnlPercent || 0) >= 0 ? '+' : ''}{(t.pnlPercent || 0).toFixed(2)}%
                         </span>
                       </div>
