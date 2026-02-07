@@ -112,8 +112,13 @@ export default function Signals() {
                       </div>
                     </div>
 
+                    {/* Summary */}
+                    {signal.summary && (
+                      <p className="mt-2 text-xs text-gray-400 italic leading-relaxed">{signal.summary}</p>
+                    )}
+
                     {/* Price Levels */}
-                    <div className="mt-4 grid grid-cols-3 gap-2">
+                    <div className="mt-3 grid grid-cols-3 gap-2">
                       <div className="bg-quant-surface rounded-lg p-2.5">
                         <span className="text-xs text-gray-500 block">Entry</span>
                         <span className="font-mono text-sm text-white">
@@ -132,6 +137,28 @@ export default function Signals() {
                           ${Number(signal.stopLoss).toLocaleString()}
                         </span>
                       </div>
+                    </div>
+
+                    {/* Risk/Reward metrics */}
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      {signal.riskRewardRatio && (
+                        <div className="bg-quant-surface rounded-lg p-2.5">
+                          <span className="text-xs text-gray-500 block">R:R</span>
+                          <span className="font-mono text-sm text-accent-cyan">{signal.riskRewardRatio}</span>
+                        </div>
+                      )}
+                      {signal.riskPercent && (
+                        <div className="bg-quant-surface rounded-lg p-2.5">
+                          <span className="text-xs text-gray-500 block">Risk</span>
+                          <span className="font-mono text-sm text-accent-red">{signal.riskPercent}%</span>
+                        </div>
+                      )}
+                      {signal.rewardPercent && (
+                        <div className="bg-quant-surface rounded-lg p-2.5">
+                          <span className="text-xs text-gray-500 block">Reward</span>
+                          <span className="font-mono text-sm text-accent-green">{signal.rewardPercent}%</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 

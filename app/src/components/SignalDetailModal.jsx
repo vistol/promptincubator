@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { X, TrendingUp, TrendingDown, Target, Shield, Info, Lightbulb, FileText } from 'lucide-react'
+import { X, TrendingUp, TrendingDown, Target, Shield, Info, Lightbulb, FileText, BarChart3, CheckCircle, XCircle, Brain } from 'lucide-react'
 import useStore from '../store/useStore'
 
 export default function SignalDetailModal() {
@@ -99,7 +99,38 @@ export default function SignalDetailModal() {
               <span>Entry</span>
               <span>TP</span>
             </div>
+
+            {/* Risk/Reward metrics inline */}
+            {(selectedSignal.riskRewardRatio || selectedSignal.riskPercent || selectedSignal.rewardPercent) && (
+              <div className="mt-3 pt-3 border-t border-quant-border grid grid-cols-3 gap-3">
+                {selectedSignal.riskRewardRatio && (
+                  <div className="text-center">
+                    <span className="text-xs text-gray-500 block">R:R Ratio</span>
+                    <span className="font-mono font-bold text-accent-cyan">{selectedSignal.riskRewardRatio}</span>
+                  </div>
+                )}
+                {selectedSignal.riskPercent && (
+                  <div className="text-center">
+                    <span className="text-xs text-gray-500 block">Risk</span>
+                    <span className="font-mono font-bold text-accent-red">{selectedSignal.riskPercent}%</span>
+                  </div>
+                )}
+                {selectedSignal.rewardPercent && (
+                  <div className="text-center">
+                    <span className="text-xs text-gray-500 block">Reward</span>
+                    <span className="font-mono font-bold text-accent-green">{selectedSignal.rewardPercent}%</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
+
+          {/* Summary */}
+          {selectedSignal.summary && (
+            <div className="bg-quant-surface rounded-xl p-4 border border-accent-cyan/20">
+              <p className="text-sm text-accent-cyan font-medium italic">{selectedSignal.summary}</p>
+            </div>
+          )}
 
           {/* IPE Score */}
           <div className="bg-quant-surface rounded-xl p-4 border border-quant-border">
@@ -168,6 +199,102 @@ export default function SignalDetailModal() {
                 </li>
               ))}
             </ul>
+          </div>
+
+          {/* AI Reasoning (Glass Box) */}
+          {selectedSignal.reasoning && (
+            <div className="bg-quant-surface rounded-xl p-4 border border-quant-border">
+              <h3 className="text-xs text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+                <Brain size={14} />
+                AI Reasoning
+              </h3>
+              <div className="space-y-3">
+                {selectedSignal.reasoning.whyAsset && (
+                  <div>
+                    <span className="text-[10px] text-accent-cyan uppercase font-bold">Why {selectedSignal.asset}?</span>
+                    <p className="text-sm text-gray-300 mt-0.5">{selectedSignal.reasoning.whyAsset}</p>
+                  </div>
+                )}
+                {selectedSignal.reasoning.whyDirection && (
+                  <div>
+                    <span className="text-[10px] uppercase font-bold" style={{ color: isLong ? '#00e676' : '#ff5252' }}>Why {selectedSignal.strategy}?</span>
+                    <p className="text-sm text-gray-300 mt-0.5">{selectedSignal.reasoning.whyDirection}</p>
+                  </div>
+                )}
+                {selectedSignal.reasoning.whyEntry && (
+                  <div>
+                    <span className="text-[10px] text-gray-400 uppercase font-bold">Entry Logic</span>
+                    <p className="text-sm text-gray-300 mt-0.5">{selectedSignal.reasoning.whyEntry}</p>
+                  </div>
+                )}
+                {selectedSignal.reasoning.whyLevels && (
+                  <div>
+                    <span className="text-[10px] text-gray-400 uppercase font-bold">TP/SL Rationale</span>
+                    <p className="text-sm text-gray-300 mt-0.5">{selectedSignal.reasoning.whyLevels}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Criteria Matched */}
+          {selectedSignal.criteriaMatched && selectedSignal.criteriaMatched.length > 0 && (
+            <div className="bg-quant-surface rounded-xl p-4 border border-quant-border">
+              <h3 className="text-xs text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+                <CheckCircle size={14} />
+                Strategy Criteria
+              </h3>
+              <div className="space-y-1.5">
+                {selectedSignal.criteriaMatched.map((c, i) => (
+                  <div key={i} className="flex items-center justify-between py-1.5 px-2 bg-quant-bg rounded-lg">
+                    <div className="flex items-center gap-2">
+                      {c.passed ? (
+                        <CheckCircle size={12} className="text-accent-green" />
+                      ) : (
+                        <XCircle size={12} className="text-accent-red" />
+                      )}
+                      <span className="text-xs text-gray-300">{c.criterion}</span>
+                    </div>
+                    <span className={`text-xs font-mono ${c.passed ? 'text-accent-green' : 'text-accent-red'}`}>{c.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Confidence Factors */}
+          {selectedSignal.confidenceFactors && selectedSignal.confidenceFactors.length > 0 && (
+            <div className="bg-quant-surface rounded-xl p-4 border border-quant-border">
+              <h3 className="text-xs text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+                <BarChart3 size={14} />
+                Confidence Breakdown
+              </h3>
+              <div className="space-y-2">
+                {selectedSignal.confidenceFactors.map((f, i) => (
+                  <div key={i}>
+                    <div className="flex items-center justify-between text-xs mb-0.5">
+                      <span className="text-gray-400">{f.factor}</span>
+                      <span className="text-gray-300 font-mono">{f.score}/{f.weight}</span>
+                    </div>
+                    <div className="h-1.5 bg-quant-bg rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${Math.min((f.score / Math.max(f.weight, 1)) * 100, 100)}%`,
+                          backgroundColor: f.score >= f.weight * 0.7 ? '#00e676' : f.score >= f.weight * 0.4 ? '#ffc107' : '#ff5252'
+                        }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Trade Config */}
+          <div className="flex items-center justify-center gap-4 text-[10px] text-gray-500">
+            {selectedSignal.leverage && <span>⚡ {selectedSignal.leverage}x leverage</span>}
+            {selectedSignal.capital && <span>💰 ${selectedSignal.capital} capital</span>}
           </div>
 
           {/* Timestamp */}

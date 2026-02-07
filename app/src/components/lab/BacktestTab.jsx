@@ -878,13 +878,50 @@ function BacktestCard({ bt, isExpanded, onToggle, onDelete }) {
               {r.trades && r.trades.length > 0 && (
                 <div>
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Trades ({r.trades.length})</p>
-                  <div className="space-y-1 max-h-40 overflow-y-auto hide-scrollbar">
-                    {r.trades.slice(0, 20).map((t, i) => (
-                      <div key={i} className="flex items-center justify-between py-1 px-2 bg-quant-surface rounded-lg text-[10px]">
-                        <span className="text-gray-400">{t.asset} {t.strategy}</span>
-                        <span className={`font-mono font-bold ${(t.pnlPercent || 0) >= 0 ? 'text-accent-green' : 'text-accent-red'}`}>
-                          {(t.pnlPercent || 0) >= 0 ? '+' : ''}{(t.pnlPercent || 0).toFixed(2)}%
-                        </span>
+                  <div className="space-y-1.5 max-h-[320px] overflow-y-auto hide-scrollbar">
+                    {r.trades.slice(0, 30).map((t, i) => (
+                      <div key={i} className="bg-quant-surface rounded-lg p-2 text-[10px]">
+                        {/* Row 1: Asset, Direction, PnL */}
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`font-bold px-1.5 py-0.5 rounded text-[9px] ${t.strategy === 'LONG' ? 'bg-accent-green/20 text-accent-green' : 'bg-accent-red/20 text-accent-red'}`}>
+                              {t.strategy}
+                            </span>
+                            <span className="text-white font-medium">{t.asset}</span>
+                          </div>
+                          <span className={`font-mono font-bold ${(t.pnlPercent || 0) >= 0 ? 'text-accent-green' : 'text-accent-red'}`}>
+                            {(t.pnlPercent || 0) >= 0 ? '+' : ''}{(t.pnlPercent || 0).toFixed(2)}%
+                          </span>
+                        </div>
+                        {/* Row 2: Entry → Exit, TP, SL */}
+                        <div className="grid grid-cols-4 gap-1 text-[9px]">
+                          <div>
+                            <span className="text-gray-500 block">Entry</span>
+                            <span className="text-gray-300 font-mono">${Number(t.adjustedEntry || t.entry || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                          </div>
+                          <div>
+                            <span className="text-gray-500 block">Exit</span>
+                            <span className="text-gray-300 font-mono">${Number(t.exitPrice || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                          </div>
+                          <div>
+                            <span className="text-accent-green/70 block">TP</span>
+                            <span className="text-accent-green/80 font-mono">${Number(t.takeProfit || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                          </div>
+                          <div>
+                            <span className="text-accent-red/70 block">SL</span>
+                            <span className="text-accent-red/80 font-mono">${Number(t.stopLoss || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                          </div>
+                        </div>
+                        {/* Row 3: Duration, Fees, Result tag */}
+                        <div className="flex items-center justify-between mt-1 pt-1 border-t border-quant-border/50">
+                          <div className="flex items-center gap-2 text-[9px] text-gray-500">
+                            <span>⏱ {t.holdingBars || '?'} bars</span>
+                            <span>💰 {(t.fees || 0).toFixed(2)}% fees</span>
+                          </div>
+                          <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded ${t.result === 'win' ? 'bg-accent-green/15 text-accent-green' : 'bg-accent-red/15 text-accent-red'}`}>
+                            {t.result === 'win' ? 'WIN' : 'LOSS'}
+                          </span>
+                        </div>
                       </div>
                     ))}
                   </div>
