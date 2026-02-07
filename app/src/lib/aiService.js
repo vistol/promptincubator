@@ -154,7 +154,7 @@ const repairTruncatedJSON = (truncated) => {
   }
 
   if (completeObjects.length === 0) {
-    throw new Error('Respuesta truncada del modelo — no se encontro ningun trade completo')
+    throw new Error('La AI envio una respuesta incompleta (JSON truncado). Intenta de nuevo — suele funcionar al segundo intento.')
   }
 
   console.warn(`Repaired truncated JSON: recovered ${completeObjects.length} complete trade(s)`)
@@ -598,11 +598,11 @@ const callGroqAPI = async (prompt, apiKey) => {
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
       messages: [
-        { role: 'system', content: 'You are a quantitative trading analyst. Always respond with valid JSON only.' },
+        { role: 'system', content: 'You are a quantitative trading analyst. Always respond with valid JSON only. Keep responses concise — return only the JSON array, no explanations.' },
         { role: 'user', content: prompt }
       ],
       temperature: 0.7,
-      max_tokens: 2048
+      max_tokens: 4096
     })
   })
 
@@ -637,11 +637,11 @@ const callSambaNovaAPI = async (prompt, apiKey) => {
     body: JSON.stringify({
       model: 'Meta-Llama-3.1-405B-Instruct',
       messages: [
-        { role: 'system', content: 'You are a quantitative trading analyst. Always respond with valid JSON only.' },
+        { role: 'system', content: 'You are a quantitative trading analyst. Always respond with valid JSON only. Keep responses concise — return only the JSON array, no explanations.' },
         { role: 'user', content: prompt }
       ],
       temperature: 0.7,
-      max_tokens: 2048
+      max_tokens: 4096
     })
   })
 

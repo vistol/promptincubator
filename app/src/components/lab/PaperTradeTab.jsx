@@ -117,9 +117,26 @@ export default function PaperTradeTab() {
 
     try {
       setGenProgress('AI analizando mercado con tu estrategia...')
-      const trades = await generateTradesFromPrompt(prompt, settings, 3, (event, step) => {
-        if (event?.message) setGenProgress(event.message)
-      })
+      let trades
+      // Retry once on parse errors (Groq/Llama sometimes truncates JSON)
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          trades = await generateTradesFromPrompt(prompt, settings, 3, (event, step) => {
+            if (event?.message) setGenProgress(event.message)
+          })
+          break // success
+        } catch (retryErr) {
+          if (attempt === 0 && retryErr.message?.includes('truncad')) {
+            setGenProgress('Respuesta truncada, reintentando...')
+            await new Promise(r => setTimeout(r, 1000))
+            continue
+          }
+          throw retryErr
+        }
+      }
+      if (!trades || trades.length === 0) {
+        throw new Error('La AI no genero trades validos. Intenta de nuevo.')
+      }
 
       setGenProgress('Abriendo posiciones virtuales...')
 
