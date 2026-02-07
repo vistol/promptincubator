@@ -82,60 +82,131 @@ const generateSignal = (promptId, promptName) => ({
 const initialPrompts = [
   {
     id: 'prompt-1',
-    name: 'Alpha Momentum',
-    content: 'Analyze momentum indicators and volume patterns to identify high-probability breakout opportunities in crypto markets.',
+    name: 'Niveles Psicologicos',
+    content: `Analiza cada precio y su distancia al numero redondo mas cercano:
+- BTC: multiplos de $5,000 ($90K, $95K, $100K, $105K)
+- ETH: multiplos de $500 ($2,500, $3,000, $3,500, $4,000)
+- SOL: multiplos de $25 ($150, $175, $200, $225)
+- BNB: multiplos de $50 ($550, $600, $650, $700)
+- Otros: multiplos de $1 o $10 segun el precio
+
+REGLAS DE ENTRADA:
+- LONG solo si el precio esta 1-3% POR DEBAJO del numero redondo (comprando en soporte psicologico)
+- SHORT solo si el precio esta 1-3% POR ENCIMA del numero redondo (vendiendo en resistencia psicologica)
+- IGNORAR si la distancia es menor a 0.5% (zona de indecision)
+- IGNORAR si la distancia es mayor a 5% (sin referencia cercana)
+
+RISK MANAGEMENT:
+- Stop Loss: 1.5% desde entry
+- Take Profit: 3.5% desde entry (R:R minimo 2:1)
+- Maximo 2 trades, siempre en assets DIFERENTES
+- Si no hay setups claros, genera solo 1 trade
+
+PRIORIDAD: BTC > ETH > SOL > BNB > el resto`,
     mode: 'auto',
     executionTime: 'intraday',
     capital: 1000,
-    leverage: 5,
-    aiModel: 'gemini',
+    leverage: 3,
+    numResults: 2,
+    aiModel: 'groq',
     minIpe: 80,
     status: 'active',
-    createdAt: '2024-01-15T10:30:00Z',
-    updatedAt: '2024-01-20T14:00:00Z',
-    trades: 24,
-    winRate: 68,
-    profitFactor: 2.1,
-    totalPnl: 1250.50,
-    maxDrawdown: 8.5
+    createdAt: '2025-01-15T10:30:00Z',
+    updatedAt: '2025-01-15T10:30:00Z',
+    trades: 0,
+    winRate: 0,
+    profitFactor: 0,
+    totalPnl: 0,
+    maxDrawdown: 0
   },
   {
     id: 'prompt-2',
-    name: 'Mean Reversion Pro',
-    content: 'Identify oversold conditions using RSI, Bollinger Bands, and order flow to execute mean reversion trades.',
-    mode: 'manual',
-    executionTime: 'swing',
-    capital: 2500,
+    name: 'Calculadora Mecanica',
+    content: `Eres un sistema MECANICO. No interpretes, solo calcula.
+
+PASO 1 - FILTRAR:
+Para cada asset, calcula: distancia_redondo = abs(precio - redondo_mas_cercano) / precio * 100
+Solo considerar assets donde distancia_redondo esta entre 1% y 4%.
+Descartar el resto.
+
+PASO 2 - DIRECCION:
+Si precio < redondo -> LONG (comprar debajo de resistencia)
+Si precio > redondo -> SHORT (vender encima de soporte)
+
+PASO 3 - NIVELES (formulas exactas):
+Para LONG:
+  entry = precio_actual
+  stopLoss = entry * 0.985 (1.5% debajo)
+  takeProfit = entry * 1.035 (3.5% arriba)
+Para SHORT:
+  entry = precio_actual
+  stopLoss = entry * 1.015 (1.5% arriba)
+  takeProfit = entry * 0.965 (3.5% abajo)
+
+PASO 4 - RANKING:
+Si hay mas de 3 candidatos, elegir los 3 con MENOR distancia_redondo (mas cerca del nivel psicologico = mayor probabilidad).
+
+PASO 5 - VALIDAR:
+Verificar que R:R > 2.0 para cada trade. Si no cumple, NO incluirlo.
+Responde SOLO con los trades que pasen todos los pasos.`,
+    mode: 'auto',
+    executionTime: 'intraday',
+    capital: 1000,
     leverage: 3,
-    aiModel: 'gemini',
-    minIpe: 85,
+    numResults: 3,
+    aiModel: 'groq',
+    minIpe: 80,
     status: 'active',
-    createdAt: '2024-01-10T08:00:00Z',
-    updatedAt: '2024-01-22T16:30:00Z',
-    trades: 12,
-    winRate: 75,
-    profitFactor: 2.8,
-    totalPnl: 890.25,
-    maxDrawdown: 5.2
+    createdAt: '2025-01-15T10:30:00Z',
+    updatedAt: '2025-01-15T10:30:00Z',
+    trades: 0,
+    winRate: 0,
+    profitFactor: 0,
+    totalPnl: 0,
+    maxDrawdown: 0
   },
   {
     id: 'prompt-3',
-    name: 'Scalp Hunter',
-    content: 'Execute quick scalping trades based on order book imbalances and micro-structure analysis.',
+    name: 'Divergencia Cross-Asset',
+    content: `Compara todos los assets y busca DIVERGENCIAS entre ellos.
+
+PASO 1 - CONTEXTO BTC:
+- Si BTC esta cerca de un soporte (1-3% debajo de redondo) = sesgo ALCISTA general
+- Si BTC esta cerca de resistencia (1-3% encima de redondo) = sesgo BAJISTA general
+- Si BTC esta lejos de niveles = NEUTRAL
+
+PASO 2 - BUSCAR DIVERGENCIAS:
+Busca assets que se muevan CONTRA el sesgo de BTC:
+- Si sesgo BTC = ALCISTA, busca altcoins cerca de RESISTENCIA -> SHORT (divergencia)
+- Si sesgo BTC = BAJISTA, busca altcoins cerca de SOPORTE -> LONG (divergencia)
+- Si BTC NEUTRAL, busca el asset mas cerca de cualquier nivel redondo
+
+PASO 3 - FILTROS:
+- Solo operar assets con precio > $1
+- Distancia al nivel redondo entre 0.5% y 3%
+- NO operar BTC directamente (es la referencia)
+- Maximo 2 trades en assets diferentes
+
+PASO 4 - NIVELES:
+- SL: 2% desde entry
+- TP: 4% desde entry (R:R = 2:1)
+
+PASO 5 - Si BTC esta a menos de 0.5% de un nivel redondo, NO operar nada (incertidumbre maxima).`,
     mode: 'auto',
-    executionTime: 'scalping',
-    capital: 500,
-    leverage: 10,
-    aiModel: 'openai',
-    minIpe: 75,
-    status: 'archived',
-    createdAt: '2024-01-05T12:00:00Z',
-    updatedAt: '2024-01-18T09:15:00Z',
-    trades: 156,
-    winRate: 52,
-    profitFactor: 1.3,
-    totalPnl: -120.75,
-    maxDrawdown: 15.3
+    executionTime: 'intraday',
+    capital: 1000,
+    leverage: 3,
+    numResults: 2,
+    aiModel: 'groq',
+    minIpe: 80,
+    status: 'active',
+    createdAt: '2025-01-15T10:30:00Z',
+    updatedAt: '2025-01-15T10:30:00Z',
+    trades: 0,
+    winRate: 0,
+    profitFactor: 0,
+    totalPnl: 0,
+    maxDrawdown: 0
   }
 ]
 
