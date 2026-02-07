@@ -950,6 +950,290 @@ export const loadHealthChecks = async (client) => {
   }
 }
 
+// ============================================
+// Lab Data Sync (Backtests, Paper Portfolio, Benchmarks)
+// ============================================
+
+// Sync backtests to Supabase
+export const syncBacktests = async (client, backtests) => {
+  if (!client || !backtests.length) return { success: true }
+
+  try {
+    const userId = await getCurrentUserId()
+    if (!userId) return { success: false, error: 'Not authenticated' }
+
+    const formattedBacktests = backtests.map(bt => ({
+      id: bt.id,
+      user_id: userId,
+      prompt_id: bt.promptId || null,
+      prompt_name: bt.promptName || 'Unknown',
+      assets: bt.assets || [],
+      interval: bt.interval || '1h',
+      range_days: bt.rangeDays || 0,
+      start_time: bt.startTime || 0,
+      end_time: bt.endTime || 0,
+      slippage: bt.slippage || 0.001,
+      taker_fee: bt.takerFee || 0.001,
+      sample_points: bt.samplePoints || 3,
+      runs_completed: bt.runsCompleted || 0,
+      btc_context: bt.btcContext || null,
+      config: bt.config || {},
+      result: bt.result || null,
+      status: bt.status || 'completed',
+      created_at: bt.createdAt || new Date().toISOString()
+    }))
+
+    const { error } = await client
+      .from('backtests')
+      .upsert(formattedBacktests, { onConflict: 'id' })
+
+    if (error) throw error
+    return { success: true }
+  } catch (err) {
+    console.error('Sync backtests error:', err)
+    return { success: false, error: err.message }
+  }
+}
+
+// Load backtests from Supabase
+export const loadBacktests = async (client) => {
+  if (!client) return { success: false, data: [] }
+
+  try {
+    const { data, error } = await client
+      .from('backtests')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    if (error) throw error
+
+    const formattedBacktests = (data || []).map(bt => ({
+      id: bt.id,
+      promptId: bt.prompt_id,
+      promptName: bt.prompt_name,
+      assets: bt.assets || [],
+      interval: bt.interval,
+      rangeDays: bt.range_days,
+      startTime: bt.start_time,
+      endTime: bt.end_time,
+      slippage: bt.slippage,
+      takerFee: bt.taker_fee,
+      samplePoints: bt.sample_points,
+      runsCompleted: bt.runs_completed,
+      btcContext: bt.btc_context,
+      config: bt.config || {},
+      result: bt.result || null,
+      status: bt.status,
+      createdAt: bt.created_at
+    }))
+
+    return { success: true, data: formattedBacktests }
+  } catch (err) {
+    console.error('Load backtests error:', err)
+    return { success: false, data: [], error: err.message }
+  }
+}
+
+// Delete backtest from Supabase
+export const deleteBacktestFromCloud = async (client, backtestId) => {
+  if (!client) return { success: true }
+
+  try {
+    const { error } = await client
+      .from('backtests')
+      .delete()
+      .eq('id', backtestId)
+
+    if (error) throw error
+    return { success: true }
+  } catch (err) {
+    console.error('Delete backtest error:', err)
+    return { success: false, error: err.message }
+  }
+}
+
+// Sync paper portfolio to Supabase (single row per user)
+export const syncPaperPortfolio = async (client, portfolio, strategies = {}) => {
+  if (!client) return { success: true }
+
+  try {
+    const userId = await getCurrentUserId()
+    if (!userId) return { success: false, error: 'Not authenticated' }
+
+    // If no portfolio, delete existing row
+    if (!portfolio) {
+      const { error } = await client
+        .from('paper_portfolios')
+        .delete()
+        .eq('user_id', userId)
+
+      if (error && error.code !== 'PGRST116') throw error
+      return { success: true }
+    }
+
+    const formattedPortfolio = {
+      id: portfolio.id || `portfolio-${userId}`,
+      user_id: userId,
+      initial_balance: portfolio.initialBalance || 10000,
+      balance: portfolio.balance || 0,
+      reserved_margin: portfolio.reservedMargin || 0,
+      total_pnl: portfolio.totalPnl || 0,
+      total_pnl_percent: portfolio.totalPnlPercent || 0,
+      total_fees: portfolio.totalFees || 0,
+      positions: portfolio.positions || [],
+      history: portfolio.history || [],
+      strategies_data: portfolio.strategies || {},
+      paper_trade_strategies: strategies || {},
+      created_at: portfolio.createdAt || new Date().toISOString(),
+      updated_at: portfolio.updatedAt || new Date().toISOString()
+    }
+
+    const { error } = await client
+      .from('paper_portfolios')
+      .upsert(formattedPortfolio, { onConflict: 'id' })
+
+    if (error) throw error
+    return { success: true }
+  } catch (err) {
+    console.error('Sync paper portfolio error:', err)
+    return { success: false, error: err.message }
+  }
+}
+
+// Load paper portfolio from Supabase
+export const loadPaperPortfolio = async (client) => {
+  if (!client) return { success: false, data: null }
+
+  try {
+    const userId = await getCurrentUserId()
+    if (!userId) return { success: false, data: null, error: 'Not authenticated' }
+
+    const { data, error } = await client
+      .from('paper_portfolios')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) throw error
+
+    if (!data) return { success: true, data: null, strategies: {} }
+
+    const portfolio = {
+      id: data.id,
+      initialBalance: data.initial_balance,
+      balance: data.balance,
+      reservedMargin: data.reserved_margin,
+      totalPnl: data.total_pnl,
+      totalPnlPercent: data.total_pnl_percent,
+      totalFees: data.total_fees,
+      positions: data.positions || [],
+      history: data.history || [],
+      strategies: data.strategies_data || {},
+      createdAt: data.created_at,
+      updatedAt: data.updated_at
+    }
+
+    return {
+      success: true,
+      data: portfolio,
+      strategies: data.paper_trade_strategies || {}
+    }
+  } catch (err) {
+    console.error('Load paper portfolio error:', err)
+    return { success: false, data: null, error: err.message }
+  }
+}
+
+// Sync benchmarks to Supabase
+export const syncBenchmarks = async (client, benchmarks) => {
+  if (!client || !benchmarks.length) return { success: true }
+
+  try {
+    const userId = await getCurrentUserId()
+    if (!userId) return { success: false, error: 'Not authenticated' }
+
+    const formattedBenchmarks = benchmarks.map(bm => ({
+      id: bm.id,
+      user_id: userId,
+      prompt_id: bm.promptId || null,
+      prompt_name: bm.promptName || 'Unknown',
+      strategy_ids: bm.strategyIds || [],
+      assets: bm.assets || [],
+      range_days: bm.rangeDays || 0,
+      start_time: bm.startTime || 0,
+      end_time: bm.endTime || 0,
+      result: bm.result || null,
+      radar_data: bm.radarData || null,
+      status: bm.status || 'completed',
+      created_at: bm.createdAt || new Date().toISOString()
+    }))
+
+    const { error } = await client
+      .from('benchmarks')
+      .upsert(formattedBenchmarks, { onConflict: 'id' })
+
+    if (error) throw error
+    return { success: true }
+  } catch (err) {
+    console.error('Sync benchmarks error:', err)
+    return { success: false, error: err.message }
+  }
+}
+
+// Load benchmarks from Supabase
+export const loadBenchmarks = async (client) => {
+  if (!client) return { success: false, data: [] }
+
+  try {
+    const { data, error } = await client
+      .from('benchmarks')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    if (error) throw error
+
+    const formattedBenchmarks = (data || []).map(bm => ({
+      id: bm.id,
+      promptId: bm.prompt_id,
+      promptName: bm.prompt_name,
+      strategyIds: bm.strategy_ids || [],
+      assets: bm.assets || [],
+      rangeDays: bm.range_days,
+      startTime: bm.start_time,
+      endTime: bm.end_time,
+      result: bm.result || null,
+      radarData: bm.radar_data || null,
+      status: bm.status,
+      createdAt: bm.created_at
+    }))
+
+    return { success: true, data: formattedBenchmarks }
+  } catch (err) {
+    console.error('Load benchmarks error:', err)
+    return { success: false, data: [], error: err.message }
+  }
+}
+
+// Delete benchmark from Supabase
+export const deleteBenchmarkFromCloud = async (client, benchmarkId) => {
+  if (!client) return { success: true }
+
+  try {
+    const { error } = await client
+      .from('benchmarks')
+      .delete()
+      .eq('id', benchmarkId)
+
+    if (error) throw error
+    return { success: true }
+  } catch (err) {
+    console.error('Delete benchmark error:', err)
+    return { success: false, error: err.message }
+  }
+}
+
 // Delete health check from Supabase
 export const deleteHealthCheckFromCloud = async (client, healthCheckId) => {
   if (!client) return { success: true }

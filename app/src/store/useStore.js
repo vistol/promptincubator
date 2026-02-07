@@ -8,14 +8,22 @@ import {
   syncEggs,
   syncSettings,
   syncHealthChecks,
+  syncBacktests,
+  syncPaperPortfolio,
+  syncBenchmarks,
   loadPrompts,
   loadSignals,
   loadEggs,
   loadSettings,
   loadHealthChecks,
+  loadBacktests,
+  loadPaperPortfolio,
+  loadBenchmarks,
   deletePromptFromCloud,
   deleteEggFromCloud,
   deleteHealthCheckFromCloud,
+  deleteBacktestFromCloud,
+  deleteBenchmarkFromCloud,
   repairEggsData,
   signOut
 } from '../lib/supabase'
@@ -2043,17 +2051,20 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         set({ syncStatus: { ...state.syncStatus, syncing: true, error: null } })
 
         try {
-          // Sync all data in parallel
-          const [promptsResult, signalsResult, eggsResult, settingsResult, healthChecksResult] = await Promise.all([
+          // Sync all data in parallel (including Lab data)
+          const [promptsResult, signalsResult, eggsResult, settingsResult, healthChecksResult, backtestsResult, paperResult, benchmarksResult] = await Promise.all([
             syncPrompts(client, state.prompts),
             syncSignals(client, state.signals),
             syncEggs(client, state.eggs),
             syncSettings(client, state.settings),
-            syncHealthChecks(client, state.healthChecks)
+            syncHealthChecks(client, state.healthChecks),
+            syncBacktests(client, state.backtests),
+            syncPaperPortfolio(client, state.paperPortfolio, state.paperTradeStrategies),
+            syncBenchmarks(client, state.benchmarks)
           ])
 
-          const hasError = !promptsResult.success || !signalsResult.success || !eggsResult.success || !settingsResult.success || !healthChecksResult.success
-          const errorMsg = promptsResult.error || signalsResult.error || eggsResult.error || settingsResult.error || healthChecksResult.error
+          const hasError = !promptsResult.success || !signalsResult.success || !eggsResult.success || !settingsResult.success || !healthChecksResult.success || !backtestsResult.success || !paperResult.success || !benchmarksResult.success
+          const errorMsg = promptsResult.error || signalsResult.error || eggsResult.error || settingsResult.error || healthChecksResult.error || backtestsResult.error || paperResult.error || benchmarksResult.error
 
           set({
             syncStatus: {
@@ -2066,7 +2077,7 @@ If no truly new strategy can be generated, you must invent a new angle rather th
 
           // Update Supabase connected status
           if (!hasError) {
-            get().addLog('sync', `Sync complete: ${state.prompts.length} prompts, ${state.signals.length} signals, ${state.eggs.length} eggs, ${state.healthChecks.length} health checks`)
+            get().addLog('sync', `Sync complete: ${state.prompts.length} prompts, ${state.signals.length} signals, ${state.eggs.length} eggs, ${state.healthChecks.length} health checks, ${state.backtests.length} backtests, ${state.benchmarks.length} benchmarks${state.paperPortfolio ? ', paper portfolio' : ''}`)
             set((s) => ({
               settings: {
                 ...s.settings,
@@ -2105,12 +2116,15 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         set({ syncStatus: { ...state.syncStatus, loading: true, error: null } })
 
         try {
-          const [promptsResult, signalsResult, eggsResult, settingsResult, healthChecksResult] = await Promise.all([
+          const [promptsResult, signalsResult, eggsResult, settingsResult, healthChecksResult, backtestsResult, paperResult, benchmarksResult] = await Promise.all([
             loadPrompts(client),
             loadSignals(client),
             loadEggs(client),
             loadSettings(client),
-            loadHealthChecks(client)
+            loadHealthChecks(client),
+            loadBacktests(client),
+            loadPaperPortfolio(client),
+            loadBenchmarks(client)
           ])
 
           // Cloud data replaces local data completely
@@ -2168,6 +2182,26 @@ If no truly new strategy can be generated, you must invent a new angle rather th
           if (healthChecksResult.success) {
             get().addLog('sync', `Loaded ${healthChecksResult.data.length} health checks from cloud`)
             set({ healthChecks: healthChecksResult.data })
+          }
+
+          // Load Lab data from cloud (replaces localStorage data)
+          if (backtestsResult.success && backtestsResult.data.length > 0) {
+            get().addLog('sync', `Loaded ${backtestsResult.data.length} backtests from cloud`)
+            set({ backtests: backtestsResult.data })
+          }
+
+          if (benchmarksResult.success && benchmarksResult.data.length > 0) {
+            get().addLog('sync', `Loaded ${benchmarksResult.data.length} benchmarks from cloud`)
+            set({ benchmarks: benchmarksResult.data })
+          }
+
+          if (paperResult.success && paperResult.data) {
+            get().addLog('sync', 'Loaded paper portfolio from cloud')
+            set({
+              paperPortfolio: paperResult.data,
+              paperTradeStrategies: paperResult.strategies || {},
+              paperTradeActive: true
+            })
           }
 
           set({
@@ -2247,13 +2281,17 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         set((state) => ({
           backtests: [{ ...backtest, id: `bt-${Date.now()}`, createdAt: new Date().toISOString() }, ...state.backtests]
         }))
+        get().triggerSync()
       },
       updateBacktest: (id, updates) => {
         set((state) => ({
           backtests: state.backtests.map(b => b.id === id ? { ...b, ...updates } : b)
         }))
+        get().triggerSync()
       },
       deleteBacktest: (id) => {
+        const client = get().getClient()
+        if (client) deleteBacktestFromCloud(client, id).catch(err => console.error('Delete backtest from cloud error:', err))
         set((state) => ({
           backtests: state.backtests.filter(b => b.id !== id),
           activeBacktestId: state.activeBacktestId === id ? null : state.activeBacktestId
@@ -2268,15 +2306,18 @@ If no truly new strategy can be generated, you must invent a new angle rather th
 
       initPaperPortfolio: (portfolio) => {
         set({ paperPortfolio: portfolio, paperTradeActive: true })
+        get().triggerSync()
       },
       updatePaperPortfolio: (portfolio) => {
         set({ paperPortfolio: portfolio })
+        get().triggerSync()
       },
       resetPaperPortfolio: (portfolio) => {
         set({
           paperPortfolio: portfolio,
           paperTradeStrategies: {}
         })
+        get().triggerSync()
       },
       togglePaperStrategy: (promptId, config = {}) => {
         set((state) => {
@@ -2290,6 +2331,7 @@ If no truly new strategy can be generated, you must invent a new angle rather th
             }
           }
         })
+        get().triggerSync()
       },
 
       // Benchmarks
@@ -2302,13 +2344,17 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         set((state) => ({
           benchmarks: [{ ...benchmark, id: `bm-${Date.now()}`, createdAt: new Date().toISOString() }, ...state.benchmarks]
         }))
+        get().triggerSync()
       },
       updateBenchmark: (id, updates) => {
         set((state) => ({
           benchmarks: state.benchmarks.map(b => b.id === id ? { ...b, ...updates } : b)
         }))
+        get().triggerSync()
       },
       deleteBenchmark: (id) => {
+        const client = get().getClient()
+        if (client) deleteBenchmarkFromCloud(client, id).catch(err => console.error('Delete benchmark from cloud error:', err))
         set((state) => ({
           benchmarks: state.benchmarks.filter(b => b.id !== id),
           activeBenchmarkId: state.activeBenchmarkId === id ? null : state.activeBenchmarkId
