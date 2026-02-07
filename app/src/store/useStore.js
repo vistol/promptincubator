@@ -2072,7 +2072,9 @@ If no truly new strategy can be generated, you must invent a new angle rather th
               anthropic: localApiKeys.anthropic || cloudApiKeys?.anthropic || '',
               google: localApiKeys.google || cloudApiKeys?.google || '',
               openai: localApiKeys.openai || cloudApiKeys?.openai || '',
-              xai: localApiKeys.xai || cloudApiKeys?.xai || ''
+              xai: localApiKeys.xai || cloudApiKeys?.xai || '',
+              groq: localApiKeys.groq || cloudApiKeys?.groq || '',
+              sambanova: localApiKeys.sambanova || cloudApiKeys?.sambanova || ''
             }
 
             const hasCloudKeys = cloudApiKeys && Object.values(cloudApiKeys).some(k => k && k.length > 0)
