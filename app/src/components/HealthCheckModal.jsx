@@ -633,17 +633,19 @@ export default function HealthCheckModal({ check, onClose }) {
                 })()}
 
                 {/* Grace Period Info */}
-                <div className="flex items-center gap-2 p-2.5 bg-accent-yellow/10 border border-accent-yellow/20 rounded-xl">
-                  <Shield size={14} className="text-accent-yellow shrink-0" />
-                  <span className="text-xs text-gray-300">
-                    Trades tendran{' '}
-                    <span className="text-accent-yellow font-mono font-bold">
-                      {settings.gracePeriodMinutes || 5}min
+                {settings.gracePeriodEnabled !== false && (
+                  <div className="flex items-center gap-2 p-2.5 bg-accent-yellow/10 border border-accent-yellow/20 rounded-xl">
+                    <Shield size={14} className="text-accent-yellow shrink-0" />
+                    <span className="text-xs text-gray-300">
+                      Trades tendran{' '}
+                      <span className="text-accent-yellow font-mono font-bold">
+                        {settings.gracePeriodMinutes || 5}min
+                      </span>
+                      {' '}de warmup antes de que TP/SL pueda cerrarlos.
+                      <span className="text-gray-500"> Configurable en Settings.</span>
                     </span>
-                    {' '}de warmup antes de que TP/SL pueda cerrarlos.
-                    <span className="text-gray-500"> Configurable en Settings.</span>
-                  </span>
-                </div>
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>

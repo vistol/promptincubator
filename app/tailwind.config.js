@@ -33,6 +33,7 @@ export default {
           red: '#ef4444',
           orange: '#f97316',
           yellow: '#fbbf24',
+          purple: '#8b5cf6',
         }
       },
       fontFamily: {

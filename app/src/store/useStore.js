@@ -259,7 +259,19 @@ const useStore = create(
         }
 
         try {
-          const trades = await generateTradesFromPrompt(prompt, get().settings, numResults, onPipelineEvent)
+          // Global timeout: 120s max for entire pipeline
+          const PIPELINE_TIMEOUT = 120000
+          let pipelineTimeoutId
+          const timeoutPromise = new Promise((_, reject) => {
+            pipelineTimeoutId = setTimeout(() => {
+              reject(new Error('Pipeline timeout: la generacion tardo mas de 120s. Revisa la consola del navegador para mas detalles.'))
+            }, PIPELINE_TIMEOUT)
+          })
+
+          const trades = await Promise.race([
+            generateTradesFromPrompt(prompt, get().settings, numResults, onPipelineEvent),
+            timeoutPromise
+          ]).finally(() => clearTimeout(pipelineTimeoutId))
 
           // Log each generated trade
           trades.forEach(trade => {
@@ -414,7 +426,10 @@ const useStore = create(
         set((state) => ({
           signals: [...newSignals, ...state.signals],
           eggs: [egg, ...state.eggs],
-          pendingTrades: []
+          pendingTrades: [],
+          // Navigate to incubator and expand the new egg
+          activeTab: 'incubator',
+          navigateToEggId: egg.id
         }))
 
         // Log egg creation
@@ -579,20 +594,108 @@ const useStore = create(
       },
 
       // Selective data reset with dependency handling
-      resetSelectiveData: (options = {}) => {
+      // Now async - deletes from cloud FIRST, then clears local state
+      resetSelectiveData: async (options = {}) => {
         const {
           deletePrompts = false,
           deleteEggs = false,
           deleteSignals = false,
+          deleteHealthChecks = false,
           deleteLogs = false,
           resetOnboarding = false,
           keepLinkedData = true // If true, keeps signals linked to eggs when deleting only prompts
         } = options
 
         const state = get()
+        const client = state.getClient()
+
+        // Track what we're deleting for return value
+        const counts = {
+          deletedPrompts: deletePrompts ? state.prompts.length : 0,
+          deletedEggs: deleteEggs ? state.eggs.length : 0,
+          deletedSignals: deleteSignals ? state.signals.length : 0,
+          deletedHealthChecks: deleteHealthChecks ? state.healthChecks.length : 0,
+          deletedLogs: deleteLogs ? state.activityLogs.length : 0,
+          cloudDeleteSuccess: false,
+          error: null
+        }
+
+        // STEP 1: Delete from cloud FIRST (this was the bug - we only cleared local state)
+        if (client) {
+          try {
+            const cloudDeletes = []
+
+            if (deleteSignals) {
+              cloudDeletes.push(client.from('signals').delete().neq('id', ''))
+            }
+
+            if (deleteEggs) {
+              cloudDeletes.push(client.from('eggs').delete().neq('id', ''))
+              // If cascade delete, also delete signals linked to eggs
+              if (!keepLinkedData) {
+                cloudDeletes.push(client.from('signals').delete().neq('id', ''))
+              }
+            }
+
+            if (deletePrompts) {
+              cloudDeletes.push(client.from('prompts').delete().neq('id', ''))
+              // If cascade delete, also delete linked eggs and their signals
+              if (!keepLinkedData) {
+                cloudDeletes.push(client.from('eggs').delete().neq('id', ''))
+                cloudDeletes.push(client.from('signals').delete().neq('id', ''))
+              }
+            }
+
+            if (deleteHealthChecks) {
+              cloudDeletes.push(client.from('health_checks').delete().neq('id', ''))
+              // Cascade: delete eggs created by health checks
+              const healthCheckEggIds = state.eggs
+                .filter(e => e.healthCheckId)
+                .map(e => e.id)
+              if (healthCheckEggIds.length > 0) {
+                // Delete health check eggs
+                cloudDeletes.push(
+                  client.from('eggs').delete().in('id', healthCheckEggIds)
+                )
+                // Delete signals from those eggs
+                const healthCheckSignalIds = state.eggs
+                  .filter(e => e.healthCheckId)
+                  .flatMap(e => e.trades)
+                if (healthCheckSignalIds.length > 0) {
+                  cloudDeletes.push(
+                    client.from('signals').delete().in('id', healthCheckSignalIds)
+                  )
+                }
+              }
+              // Update counts to include cascaded items
+              counts.deletedEggs += healthCheckEggIds.length
+              counts.deletedSignals += state.eggs
+                .filter(e => e.healthCheckId)
+                .flatMap(e => e.trades).length
+            }
+
+            // Execute all cloud deletes
+            if (cloudDeletes.length > 0) {
+              await Promise.all(cloudDeletes)
+              counts.cloudDeleteSuccess = true
+              get().addLog('sync', `Cloud data deleted: ${cloudDeletes.length} operations`)
+            }
+          } catch (err) {
+            console.error('Failed to delete from cloud:', err)
+            counts.error = err.message
+            get().addLog('error', `Cloud delete failed: ${err.message}`)
+            // Continue with local delete anyway
+          }
+        }
+
+        // STEP 2: Set reset flag to prevent cloud reload race condition
+        localStorage.setItem('prompthatcher-selective-reset', 'true')
+
+        // STEP 3: Clear local state
         let newPrompts = state.prompts
         let newEggs = state.eggs
         let newSignals = state.signals
+        let newHealthChecks = state.healthChecks
         let newLogs = state.activityLogs
         let newOnboarding = state.onboardingCompleted
 
@@ -642,6 +745,28 @@ const useStore = create(
           newPrompts = []
         }
 
+        // Delete health checks (with cascade to their eggs)
+        if (deleteHealthChecks) {
+          // Get eggs created by health checks
+          const healthCheckEggIds = newEggs
+            .filter(e => e.healthCheckId)
+            .map(e => e.id)
+
+          // Get signals from those eggs
+          const healthCheckSignalIds = newEggs
+            .filter(e => e.healthCheckId)
+            .flatMap(e => e.trades)
+
+          // Remove health check eggs
+          newEggs = newEggs.filter(e => !e.healthCheckId)
+
+          // Remove signals from health check eggs
+          newSignals = newSignals.filter(s => !healthCheckSignalIds.includes(s.id))
+
+          // Clear all health checks
+          newHealthChecks = []
+        }
+
         // Delete activity logs
         if (deleteLogs) {
           newLogs = []
@@ -656,19 +781,17 @@ const useStore = create(
           prompts: newPrompts,
           eggs: newEggs,
           signals: newSignals,
+          healthChecks: newHealthChecks,
           activityLogs: newLogs,
           onboardingCompleted: newOnboarding
         })
 
-        // Trigger sync if connected
-        get().triggerSync()
+        get().addLog('system', `Selective reset complete: ${counts.deletedPrompts} prompts, ${counts.deletedEggs} eggs, ${counts.deletedSignals} signals, ${counts.deletedHealthChecks} health checks, ${counts.deletedLogs} logs`)
 
-        return {
-          deletedPrompts: deletePrompts ? state.prompts.length : 0,
-          deletedEggs: deleteEggs ? state.eggs.length : 0,
-          deletedSignals: deleteSignals ? state.signals.length : 0,
-          deletedLogs: deleteLogs ? state.activityLogs.length : 0
-        }
+        // STEP 4: Force page reload for guaranteed clean state
+        window.location.reload()
+
+        return counts
       },
 
       // Get data counts for UI
@@ -678,6 +801,8 @@ const useStore = create(
         const hatchedEggs = state.eggs.filter(e => e.status === 'hatched')
         const activeSignals = state.signals.filter(s => s.status === 'active')
         const closedSignals = state.signals.filter(s => s.status === 'closed')
+        const activeHealthChecks = state.healthChecks?.filter(hc => hc.isActive) || []
+        const healthCheckEggs = state.eggs.filter(e => e.healthCheckId)
 
         return {
           prompts: state.prompts.length,
@@ -687,7 +812,10 @@ const useStore = create(
           signals: state.signals.length,
           activeSignals: activeSignals.length,
           closedSignals: closedSignals.length,
-          activityLogs: state.activityLogs.length
+          activityLogs: state.activityLogs.length,
+          healthChecks: state.healthChecks?.length || 0,
+          activeHealthChecks: activeHealthChecks.length,
+          healthCheckEggs: healthCheckEggs.length
         }
       },
       isConfigured: () => {
@@ -701,12 +829,15 @@ const useStore = create(
       settings: {
         aiProvider: 'google',
         aiModel: 'gemini-2.5-flash',
+        gracePeriodEnabled: true, // Toggle grace period on/off
         gracePeriodMinutes: 5, // Warmup before TP/SL can close trades
         apiKeys: {
           anthropic: '',
           google: '',
           openai: '',
-          xai: ''
+          xai: '',
+          groq: '',
+          sambanova: ''
         },
         supabase: {
           url: '',
@@ -831,12 +962,16 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         }))
         get().triggerSync()
       },
-      updateApiKey: (provider, key) => set((state) => ({
-        settings: {
-          ...state.settings,
-          apiKeys: { ...state.settings.apiKeys, [provider]: key }
-        }
-      })),
+      updateApiKey: (provider, key) => {
+        set((state) => ({
+          settings: {
+            ...state.settings,
+            apiKeys: { ...state.settings.apiKeys, [provider]: key }
+          }
+        }))
+        // Trigger sync to save encrypted API keys to Supabase
+        get().triggerSync()
+      },
       updateSupabase: (updates) => set((state) => ({
         settings: {
           ...state.settings,
@@ -1012,11 +1147,12 @@ If no truly new strategy can be generated, you must invent a new angle rather th
           // Grace period: protect trades from closing too early after egg creation
           // Use the EGG's createdAt (when incubation started), not the signal's createdAt
           // (which is set during AI generation, potentially minutes before the egg is created)
+          const gracePeriodEnabled = state.settings.gracePeriodEnabled !== false
           const gracePeriodMs = (state.settings.gracePeriodMinutes ?? 5) * 60 * 1000
           const parentEgg = eggs.find(e => e.trades && e.trades.includes(signal.id))
           const eggCreatedAt = parentEgg?.createdAt ? new Date(parentEgg.createdAt).getTime() : 0
           const eggAge = eggCreatedAt ? Date.now() - eggCreatedAt : Infinity
-          const inGracePeriod = eggCreatedAt > 0 && eggAge < gracePeriodMs
+          const inGracePeriod = gracePeriodEnabled && eggCreatedAt > 0 && eggAge < gracePeriodMs
 
           if (inGracePeriod) {
             const gracePeriodEndsAt = new Date(eggCreatedAt + gracePeriodMs).toISOString()
@@ -1418,6 +1554,7 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         get().addLog('system', `Running health check "${check.name}" with ${total} variation(s)${skippedCount > 0 ? ` (${skippedCount} skipped)` : ''}...`)
 
         let successCount = 0
+        let firstEggId = null
         const errors = []
 
         for (let i = 0; i < runnableVariations.length; i++) {
@@ -1452,6 +1589,7 @@ If no truly new strategy can be generated, you must invent a new angle rather th
                 presetName: check.preset?.name || check.name || 'Health Check'
               })
               successCount++
+              if (!firstEggId && egg?.id) firstEggId = egg.id
 
               // Record success event in run log
               runLogEntry.events.push(createRunEvent(i, variation, 'success', {
@@ -1533,6 +1671,11 @@ If no truly new strategy can be generated, you must invent a new angle rather th
 
         get().addLog('system', `Health check "${check.name}" complete: ${successCount}/${total} eggs created${errorSummary.length > 0 ? ` — ${errorSummary.join(', ')}` : ''}`)
         get().triggerSync()
+
+        // Navigate to the first created egg after all variations complete
+        if (firstEggId) {
+          set({ activeTab: 'incubator', navigateToEggId: firstEggId })
+        }
 
         return { success: true, created: successCount, errors }
       },
@@ -1620,6 +1763,7 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         get().addLog('system', `Retrying ${total} failed variation(s) for "${check.name}"${skippedCount > 0 ? ` (${skippedCount} still skipped)` : ''}...`)
 
         let successCount = 0
+        let firstEggId = null
         const errors = []
 
         for (let i = 0; i < runnableVariations.length; i++) {
@@ -1651,6 +1795,7 @@ If no truly new strategy can be generated, you must invent a new angle rather th
                 presetName: check.preset?.name || check.name || 'Health Check'
               })
               successCount++
+              if (!firstEggId && egg?.id) firstEggId = egg.id
 
               runLogEntry.events.push(createRunEvent(i, variation, 'success', {
                 durationMs: Date.now() - variationStart,
@@ -1726,6 +1871,11 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         get().addLog('system', `Retry "${check.name}" complete: ${successCount}/${total} eggs created${errorSummary.length > 0 ? ` — ${errorSummary.join(', ')}` : ''}`)
         get().triggerSync()
 
+        // Navigate to the first created egg after all retries complete
+        if (firstEggId) {
+          set({ activeTab: 'incubator', navigateToEggId: firstEggId })
+        }
+
         return { success: true, created: successCount, errors }
       },
 
@@ -1764,6 +1914,15 @@ If no truly new strategy can be generated, you must invent a new angle rather th
           set({ isCloudInitialized: true })
           get().addLog('system', 'Fresh start - skipping cloud data load')
           return { success: true, freshStart: true }
+        }
+
+        // Check if a selective reset was just performed - still load from cloud
+        // but log it (we need to load remaining data like prompts that weren't deleted)
+        const selectiveResetPending = localStorage.getItem('prompthatcher-selective-reset')
+        if (selectiveResetPending) {
+          localStorage.removeItem('prompthatcher-selective-reset')
+          get().addLog('system', 'Selective reset complete - loading remaining data from cloud')
+          // Continue to load from cloud (don't return early)
         }
 
         if (!client) {
@@ -1903,13 +2062,32 @@ If no truly new strategy can be generated, you must invent a new angle rather th
 
           if (settingsResult.success && settingsResult.data) {
             get().addLog('sync', 'Loaded settings from cloud')
+
+            // Check if cloud has API keys - use them if local keys are empty
+            const cloudApiKeys = settingsResult.data.apiKeys
+            const localApiKeys = get().settings.apiKeys
+
+            // Merge API keys: prefer cloud keys if local are empty
+            const mergedApiKeys = {
+              anthropic: localApiKeys.anthropic || cloudApiKeys?.anthropic || '',
+              google: localApiKeys.google || cloudApiKeys?.google || '',
+              openai: localApiKeys.openai || cloudApiKeys?.openai || '',
+              xai: localApiKeys.xai || cloudApiKeys?.xai || ''
+            }
+
+            const hasCloudKeys = cloudApiKeys && Object.values(cloudApiKeys).some(k => k && k.length > 0)
+            if (hasCloudKeys) {
+              get().addLog('sync', 'Loaded encrypted API keys from cloud')
+            }
+
             set((s) => ({
               settings: {
                 ...s.settings,
                 aiProvider: settingsResult.data.aiProvider || s.settings.aiProvider,
                 aiModel: settingsResult.data.aiModel || s.settings.aiModel,
                 systemPrompt: settingsResult.data.systemPrompt || s.settings.systemPrompt,
-                gracePeriodMinutes: settingsResult.data.gracePeriodMinutes ?? s.settings.gracePeriodMinutes
+                gracePeriodMinutes: settingsResult.data.gracePeriodMinutes ?? s.settings.gracePeriodMinutes,
+                apiKeys: mergedApiKeys
               }
             }))
           }
@@ -1980,10 +2158,97 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         }
       },
 
+      // ===== LAB STATE (Backtest, Paper Trading, Benchmark) =====
+      labActiveTab: 'backtest', // 'backtest' | 'paperTrade' | 'benchmark'
+      labWizardOpen: false, // Triggers the wizard/create flow in the active Lab tab
+      setLabActiveTab: (tab) => set({ labActiveTab: tab }),
+      setLabWizardOpen: (open) => set({ labWizardOpen: open }),
+
+      // Backtests
+      backtests: [],
+      activeBacktestId: null,
+      isRunningBacktest: false,
+      backtestProgress: null,
+
+      addBacktest: (backtest) => {
+        set((state) => ({
+          backtests: [{ ...backtest, id: `bt-${Date.now()}`, createdAt: new Date().toISOString() }, ...state.backtests]
+        }))
+      },
+      updateBacktest: (id, updates) => {
+        set((state) => ({
+          backtests: state.backtests.map(b => b.id === id ? { ...b, ...updates } : b)
+        }))
+      },
+      deleteBacktest: (id) => {
+        set((state) => ({
+          backtests: state.backtests.filter(b => b.id !== id),
+          activeBacktestId: state.activeBacktestId === id ? null : state.activeBacktestId
+        }))
+      },
+      setActiveBacktest: (id) => set({ activeBacktestId: id }),
+
+      // Paper Trading
+      paperPortfolio: null,
+      paperTradeActive: false,
+      paperTradeStrategies: {}, // { promptId: { active, interval, lastRun } }
+
+      initPaperPortfolio: (portfolio) => {
+        set({ paperPortfolio: portfolio, paperTradeActive: true })
+      },
+      updatePaperPortfolio: (portfolio) => {
+        set({ paperPortfolio: portfolio })
+      },
+      resetPaperPortfolio: (portfolio) => {
+        set({
+          paperPortfolio: portfolio,
+          paperTradeStrategies: {}
+        })
+      },
+      togglePaperStrategy: (promptId, config = {}) => {
+        set((state) => {
+          const current = state.paperTradeStrategies[promptId]
+          return {
+            paperTradeStrategies: {
+              ...state.paperTradeStrategies,
+              [promptId]: current?.active
+                ? { ...current, active: false }
+                : { active: true, interval: config.interval || '4h', allocation: config.allocation || 1000, lastRun: null }
+            }
+          }
+        })
+      },
+
+      // Benchmarks
+      benchmarks: [],
+      activeBenchmarkId: null,
+      isRunningBenchmark: false,
+      benchmarkProgress: null,
+
+      addBenchmark: (benchmark) => {
+        set((state) => ({
+          benchmarks: [{ ...benchmark, id: `bm-${Date.now()}`, createdAt: new Date().toISOString() }, ...state.benchmarks]
+        }))
+      },
+      updateBenchmark: (id, updates) => {
+        set((state) => ({
+          benchmarks: state.benchmarks.map(b => b.id === id ? { ...b, ...updates } : b)
+        }))
+      },
+      deleteBenchmark: (id) => {
+        set((state) => ({
+          benchmarks: state.benchmarks.filter(b => b.id !== id),
+          activeBenchmarkId: state.activeBenchmarkId === id ? null : state.activeBenchmarkId
+        }))
+      },
+      setActiveBenchmark: (id) => set({ activeBenchmarkId: id }),
+
       // Auto-sync helper (debounced in real usage)
       triggerSync: () => {
         const state = get()
-        if (state.settings.supabase.connected && !state.syncStatus.syncing) {
+        // Always sync if authenticated (we use hardcoded Supabase now)
+        const client = state.getClient()
+        if (client && state.isAuthenticated && !state.syncStatus.syncing) {
           // Debounce sync to avoid too many requests
           setTimeout(() => {
             get().syncToCloud()
@@ -2001,8 +2266,15 @@ If no truly new strategy can be generated, you must invent a new angle rather th
           tradingPlatform: state.settings.tradingPlatform,
           apiKeys: state.settings.apiKeys,
           aiProvider: state.settings.aiProvider,
+          gracePeriodEnabled: state.settings.gracePeriodEnabled,
           gracePeriodMinutes: state.settings.gracePeriodMinutes
-        }
+        },
+        // Lab data persistence
+        backtests: state.backtests,
+        benchmarks: state.benchmarks,
+        paperPortfolio: state.paperPortfolio,
+        paperTradeStrategies: state.paperTradeStrategies,
+        paperTradeActive: state.paperTradeActive
       }),
       // Deep merge settings to preserve default values for non-persisted properties
       merge: (persistedState, currentState) => ({
@@ -2025,7 +2297,13 @@ If no truly new strategy can be generated, you must invent a new angle rather th
             ...currentState.settings.apiKeys,
             ...(persistedState?.settings?.apiKeys || {})
           }
-        }
+        },
+        // Lab data merge
+        backtests: persistedState?.backtests || currentState.backtests,
+        benchmarks: persistedState?.benchmarks || currentState.benchmarks,
+        paperPortfolio: persistedState?.paperPortfolio || currentState.paperPortfolio,
+        paperTradeStrategies: persistedState?.paperTradeStrategies || currentState.paperTradeStrategies,
+        paperTradeActive: persistedState?.paperTradeActive || currentState.paperTradeActive
       })
     }
   )

@@ -19,6 +19,8 @@ const AI_PROVIDERS = [
   { id: 'google', label: 'Gemini', icon: '🔮' },
   { id: 'openai', label: 'GPT-4', icon: '🤖' },
   { id: 'xai', label: 'Grok', icon: '⚡' },
+  { id: 'groq', label: 'Groq', icon: '🚀' },
+  { id: 'sambanova', label: 'SambaNova', icon: '🧬' },
 ]
 
 // Target profit presets
@@ -460,16 +462,18 @@ Example: Find cryptocurrencies with RSI below 30 on the 4H timeframe, near histo
                 </div>
 
                 {/* Grace Period Info */}
-                <div className="flex items-center gap-2 p-2.5 bg-accent-yellow/10 border border-accent-yellow/20 rounded-xl">
-                  <Shield size={14} className="text-accent-yellow shrink-0" />
-                  <span className="text-xs text-gray-300">
-                    Trades tendran{' '}
-                    <span className="text-accent-yellow font-mono font-bold">
-                      {settings.gracePeriodMinutes || 5}min
+                {settings.gracePeriodEnabled !== false && (
+                  <div className="flex items-center gap-2 p-2.5 bg-accent-yellow/10 border border-accent-yellow/20 rounded-xl">
+                    <Shield size={14} className="text-accent-yellow shrink-0" />
+                    <span className="text-xs text-gray-300">
+                      Trades tendran{' '}
+                      <span className="text-accent-yellow font-mono font-bold">
+                        {settings.gracePeriodMinutes || 5}min
+                      </span>
+                      {' '}de warmup antes de que TP/SL pueda cerrarlos
                     </span>
-                    {' '}de warmup antes de que TP/SL pueda cerrarlos
-                  </span>
-                </div>
+                  </div>
+                )}
 
                 {/* Target Mode Options */}
                 {executionTime === 'target' && (

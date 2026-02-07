@@ -7,6 +7,7 @@ import Incubator from './pages/Incubator'
 import Signals from './pages/Signals'
 import Prompts from './pages/Prompts'
 import Settings from './pages/Settings'
+import Lab from './pages/Lab'
 import PromptDetail from './pages/PromptDetail'
 import NewPromptModal from './components/NewPromptModal'
 import SignalDetailModal from './components/SignalDetailModal'
@@ -45,6 +46,7 @@ function App() {
   const isCloudInitialized = useStore((state) => state.isCloudInitialized) || false
   const isInitializing = useStore((state) => state.isInitializing) || false
   const initializeFromCloud = useStore((state) => state.initializeFromCloud)
+  const settings = useStore((state) => state.settings) || {}
 
   // Listen for auth state changes
   useEffect(() => {
@@ -114,12 +116,8 @@ function App() {
     return <Login authError={authError} />
   }
 
-  // Show onboarding if not completed (after login)
-  if (!onboardingCompleted) {
-    return <Onboarding />
-  }
-
-  // Show loading screen while initializing from cloud
+  // Show loading screen while initializing from cloud (MUST happen before onboarding check)
+  // This ensures API keys are loaded from cloud before deciding if onboarding is needed
   if (!isCloudInitialized || isInitializing) {
     return (
       <div className="min-h-screen bg-quant-bg flex flex-col items-center justify-center">
@@ -144,6 +142,13 @@ function App() {
     )
   }
 
+  // Show onboarding only if not completed AND no API keys exist (after cloud load)
+  // This allows users with API keys in cloud to skip onboarding
+  const hasApiKeys = Object.values(settings.apiKeys || {}).some(key => key && key.length > 0)
+  if (!onboardingCompleted && !hasApiKeys) {
+    return <Onboarding />
+  }
+
   const renderPage = () => {
     if (selectedPromptId) {
       return <PromptDetail />
@@ -154,6 +159,8 @@ function App() {
         return <Prompts />
       case 'incubator':
         return <Incubator />
+      case 'lab':
+        return <Lab />
       case 'signals':
         return <Signals />
       case 'settings':
@@ -172,9 +179,16 @@ function App() {
         </AnimatePresence>
       </main>
 
-      {/* FAB for adding new prompts - show on Prompts and Incubator pages */}
-      {(activeTab === 'prompts' || activeTab === 'incubator') && !selectedPromptId && (
-        <FAB onClick={() => activeTab === 'prompts' ? setPromptActionModalOpen(true) : setNewPromptModalOpen(true)} />
+      {/* FAB - show on Prompts, Incubator, Signals and Lab pages */}
+      {(activeTab === 'prompts' || activeTab === 'incubator' || activeTab === 'signals' || activeTab === 'lab') && !selectedPromptId && (
+        <FAB onClick={() => {
+          if (activeTab === 'lab') {
+            // On Lab page, directly open the wizard for the active tab
+            useStore.setState({ labWizardOpen: true })
+          } else {
+            setPromptActionModalOpen(true)
+          }
+        }} />
       )}
 
       {/* Bottom Navigation */}

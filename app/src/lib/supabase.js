@@ -1,5 +1,117 @@
 import { createClient } from '@supabase/supabase-js'
 
+// ============================================
+// API Key Encryption Utilities
+// ============================================
+// Uses AES-GCM encryption with a user-specific key derived from their user ID
+// This ensures API keys are encrypted at rest in Supabase
+
+const ENCRYPTION_SALT = 'prompthatcher-api-keys-v1'
+
+// Derive an encryption key from user ID using PBKDF2
+const deriveKey = async (userId) => {
+  const encoder = new TextEncoder()
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(userId + ENCRYPTION_SALT),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  )
+
+  return crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: encoder.encode(ENCRYPTION_SALT),
+      iterations: 100000,
+      hash: 'SHA-256'
+    },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  )
+}
+
+// Encrypt a string value
+const encryptValue = async (value, userId) => {
+  if (!value || value.trim() === '') return ''
+
+  try {
+    const key = await deriveKey(userId)
+    const encoder = new TextEncoder()
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+
+    const encrypted = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      key,
+      encoder.encode(value)
+    )
+
+    // Combine IV + encrypted data and encode as base64
+    const combined = new Uint8Array(iv.length + encrypted.byteLength)
+    combined.set(iv)
+    combined.set(new Uint8Array(encrypted), iv.length)
+
+    return btoa(String.fromCharCode(...combined))
+  } catch (err) {
+    console.error('Encryption error:', err)
+    return ''
+  }
+}
+
+// Decrypt a string value
+const decryptValue = async (encryptedValue, userId) => {
+  if (!encryptedValue || encryptedValue.trim() === '') return ''
+
+  try {
+    const key = await deriveKey(userId)
+    const combined = new Uint8Array(
+      atob(encryptedValue).split('').map(c => c.charCodeAt(0))
+    )
+
+    const iv = combined.slice(0, 12)
+    const data = combined.slice(12)
+
+    const decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv },
+      key,
+      data
+    )
+
+    return new TextDecoder().decode(decrypted)
+  } catch (err) {
+    console.error('Decryption error:', err)
+    return ''
+  }
+}
+
+// Encrypt all API keys
+const encryptApiKeys = async (apiKeys, userId) => {
+  if (!apiKeys || !userId) return null
+
+  const encrypted = {}
+  for (const [provider, key] of Object.entries(apiKeys)) {
+    encrypted[provider] = await encryptValue(key, userId)
+  }
+  return encrypted
+}
+
+// Decrypt all API keys
+const decryptApiKeys = async (encryptedKeys, userId) => {
+  if (!encryptedKeys || !userId) return null
+
+  const decrypted = {}
+  for (const [provider, encryptedKey] of Object.entries(encryptedKeys)) {
+    decrypted[provider] = await decryptValue(encryptedKey, userId)
+  }
+  return decrypted
+}
+
+// ============================================
+// Supabase Client Setup
+// ============================================
+
 // Hardcoded Supabase credentials (safe to expose - security via RLS)
 const SUPABASE_URL = 'https://mbictfzbkvmxysmiovlv.supabase.co'
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1iaWN0Znpia3ZteHlzbWlvdmx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk0NzIwMjEsImV4cCI6MjA4NTA0ODAyMX0.XUbfMC90Osbosb94fmbBUv-cezbd2VJ3jAvrrzhV0bs'
@@ -256,7 +368,7 @@ export const syncSignals = async (client, signals) => {
   }
 }
 
-// Sync settings to Supabase
+// Sync settings to Supabase (including encrypted API keys)
 export const syncSettings = async (client, settings) => {
   if (!client) return { success: true }
 
@@ -279,15 +391,45 @@ export const syncSettings = async (client, settings) => {
 
     if (error) throw error
 
-    // Try to sync grace_period_minutes (column may not exist yet)
-    if (settings.gracePeriodMinutes !== undefined) {
+    // Try to sync grace period settings (columns may not exist yet)
+    if (settings.gracePeriodMinutes !== undefined || settings.gracePeriodEnabled !== undefined) {
+      const graceUpdate = {}
+      if (settings.gracePeriodMinutes !== undefined) graceUpdate.grace_period_minutes = settings.gracePeriodMinutes
+      if (settings.gracePeriodEnabled !== undefined) graceUpdate.grace_period_enabled = settings.gracePeriodEnabled
+
       const { error: graceError } = await client
         .from('settings')
-        .update({ grace_period_minutes: settings.gracePeriodMinutes })
+        .update(graceUpdate)
         .eq('user_id', userId)
 
       if (graceError) {
-        console.warn('grace_period_minutes column not available in Supabase, skipping:', graceError.message)
+        console.warn('grace period columns not available in Supabase, skipping:', graceError.message)
+      }
+    }
+
+    // Sync encrypted API keys
+    if (settings.apiKeys) {
+      try {
+        const encryptedKeys = await encryptApiKeys(settings.apiKeys, userId)
+        if (encryptedKeys) {
+          const { error: apiKeysError } = await client
+            .from('settings')
+            .update({
+              api_key_anthropic: encryptedKeys.anthropic || '',
+              api_key_google: encryptedKeys.google || '',
+              api_key_openai: encryptedKeys.openai || '',
+              api_key_xai: encryptedKeys.xai || '',
+              api_key_groq: encryptedKeys.groq || '',
+              api_key_sambanova: encryptedKeys.sambanova || ''
+            })
+            .eq('user_id', userId)
+
+          if (apiKeysError) {
+            console.warn('API key sync failed:', apiKeysError.message)
+          }
+        }
+      } catch (encryptErr) {
+        console.warn('Failed to encrypt/sync API keys:', encryptErr.message)
       }
     }
 
@@ -376,7 +518,7 @@ export const loadSignals = async (client) => {
   }
 }
 
-// Load settings from Supabase
+// Load settings from Supabase (including decrypted API keys)
 export const loadSettings = async (client) => {
   if (!client) return { success: false, data: null }
 
@@ -393,15 +535,41 @@ export const loadSettings = async (client) => {
     if (error && error.code !== 'PGRST116') throw error
 
     if (data) {
-      return {
-        success: true,
-        data: {
-          aiProvider: data.ai_provider,
-          aiModel: data.ai_model,
-          systemPrompt: data.system_prompt,
-          ...(data.grace_period_minutes !== undefined && { gracePeriodMinutes: data.grace_period_minutes })
+      const result = {
+        aiProvider: data.ai_provider,
+        aiModel: data.ai_model,
+        systemPrompt: data.system_prompt,
+        ...(data.grace_period_minutes !== undefined && { gracePeriodMinutes: data.grace_period_minutes }),
+        ...(data.grace_period_enabled !== undefined && { gracePeriodEnabled: data.grace_period_enabled })
+      }
+
+      // Try to decrypt API keys if they exist
+      const hasEncryptedKeys = data.api_key_anthropic || data.api_key_google ||
+                               data.api_key_openai || data.api_key_xai ||
+                               data.api_key_groq || data.api_key_sambanova
+
+      if (hasEncryptedKeys) {
+        try {
+          const encryptedKeys = {
+            anthropic: data.api_key_anthropic || '',
+            google: data.api_key_google || '',
+            openai: data.api_key_openai || '',
+            xai: data.api_key_xai || '',
+            groq: data.api_key_groq || '',
+            sambanova: data.api_key_sambanova || ''
+          }
+
+          const decryptedKeys = await decryptApiKeys(encryptedKeys, userId)
+          if (decryptedKeys) {
+            result.apiKeys = decryptedKeys
+          }
+        } catch (decryptErr) {
+          console.warn('Failed to decrypt API keys:', decryptErr.message)
+          // Continue without API keys - user can re-enter them
         }
       }
+
+      return { success: true, data: result }
     }
 
     return { success: true, data: null }

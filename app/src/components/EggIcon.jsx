@@ -1,19 +1,23 @@
+import { useMemo } from 'react'
 import { motion } from 'framer-motion'
+
+let eggIconCounter = 0
 
 export default function EggIcon({
   size = 48,
   status = 'incubating',
   winRate = 0,
-  isHealthCheck = false,
   className = ''
 }) {
+  // Unique IDs per instance to avoid SVG defs collisions across multiple eggs
+  const { gradId, glowId } = useMemo(() => {
+    const id = ++eggIconCounter
+    return { gradId: `eggGrad${id}`, glowId: `glow${id}` }
+  }, [])
+
   const getEggColor = () => {
-    if (status === 'expired') {
-      return '#f97316' // orange for expired
-    }
-    if (status === 'hatched') {
-      return winRate >= 50 ? '#10b981' : '#ef4444'
-    }
+    if (status === 'expired') return '#f97316'
+    if (status === 'hatched') return winRate >= 50 ? '#10b981' : '#ef4444'
     return '#00f0ff'
   }
 
@@ -38,11 +42,11 @@ export default function EggIcon({
         transition={{ type: 'spring', stiffness: 200 }}
       >
         <defs>
-          <linearGradient id="hatchedGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" style={{ stopColor: color, stopOpacity: 1 }} />
             <stop offset="100%" style={{ stopColor: '#3b82f6', stopOpacity: 1 }} />
           </linearGradient>
-          <filter id="glowHatched">
+          <filter id={glowId}>
             <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
             <feMerge>
               <feMergeNode in="coloredBlur"/>
@@ -52,85 +56,25 @@ export default function EggIcon({
         </defs>
 
         {/* Glow */}
-        <ellipse
-          cx="50"
-          cy="70"
-          rx="28"
-          ry="20"
-          fill={color}
-          opacity={getGlowIntensity()}
-          filter="url(#glowHatched)"
-        />
+        <ellipse cx="50" cy="70" rx="28" ry="20" fill={color} opacity={getGlowIntensity()} filter={`url(#${glowId})`} />
 
         {/* Bottom shell (broken) */}
         <motion.path
-          d="M 22 65
-             Q 22 90, 50 90
-             Q 78 90, 78 65
-             L 72 55
-             L 65 62
-             L 55 50
-             L 45 60
-             L 35 52
-             L 28 58
-             Z"
-          fill="url(#hatchedGrad)"
-          initial={{ scale: 0.8, y: 10 }}
-          animate={{ scale: 1, y: 0 }}
-          transition={{ duration: 0.4 }}
+          d="M 22 65 Q 22 90, 50 90 Q 78 90, 78 65 L 72 55 L 65 62 L 55 50 L 45 60 L 35 52 L 28 58 Z"
+          fill={`url(#${gradId})`}
+          initial={{ scale: 0.8, y: 10 }} animate={{ scale: 1, y: 0 }} transition={{ duration: 0.4 }}
         />
 
         {/* Inner shadow on shell */}
-        <path
-          d="M 30 65
-             Q 30 82, 50 82
-             Q 70 82, 70 65
-             L 65 58
-             L 55 55
-             L 45 60
-             L 35 55
-             Z"
-          fill="#0a0e17"
-          opacity="0.3"
-        />
+        <path d="M 30 65 Q 30 82, 50 82 Q 70 82, 70 65 L 65 58 L 55 55 L 45 60 L 35 55 Z" fill="#0a0e17" opacity="0.3" />
 
-        {/* Star/sparkle emerging (success indicator) */}
-        <motion.g
-          initial={{ scale: 0, y: 10 }}
-          animate={{ scale: 1, y: 0 }}
-          transition={{ delay: 0.3, type: 'spring', stiffness: 300 }}
-        >
-          {/* Main star */}
-          <motion.path
-            d="M 50 15 L 53 28 L 65 28 L 55 36 L 59 50 L 50 42 L 41 50 L 45 36 L 35 28 L 47 28 Z"
-            fill={color}
-            initial={{ rotate: -20 }}
-            animate={{ rotate: 0 }}
-            transition={{ delay: 0.4 }}
-          />
-          {/* Sparkles */}
-          <motion.circle cx="35" cy="22" r="2" fill={color} opacity="0.8"
-            initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.5 }} />
-          <motion.circle cx="65" cy="20" r="2.5" fill={color} opacity="0.8"
-            initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.6 }} />
-          <motion.circle cx="70" cy="35" r="1.5" fill={color} opacity="0.6"
-            initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.7 }} />
+        {/* Star/sparkle emerging */}
+        <motion.g initial={{ scale: 0, y: 10 }} animate={{ scale: 1, y: 0 }} transition={{ delay: 0.3, type: 'spring', stiffness: 300 }}>
+          <motion.path d="M 50 15 L 53 28 L 65 28 L 55 36 L 59 50 L 50 42 L 41 50 L 45 36 L 35 28 L 47 28 Z" fill={color} initial={{ rotate: -20 }} animate={{ rotate: 0 }} transition={{ delay: 0.4 }} />
+          <motion.circle cx="35" cy="22" r="2" fill={color} opacity="0.8" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.5 }} />
+          <motion.circle cx="65" cy="20" r="2.5" fill={color} opacity="0.8" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.6 }} />
+          <motion.circle cx="70" cy="35" r="1.5" fill={color} opacity="0.6" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.7 }} />
         </motion.g>
-
-        {/* Health check badge */}
-        {isHealthCheck && (
-          <g>
-            <circle cx="72" cy="75" r="12" fill="#0a0e17" stroke="#10b981" strokeWidth="2" />
-            <path
-              d="M 64 75 L 68 75 L 70 70 L 74 80 L 76 72 L 78 75 L 80 75"
-              fill="none"
-              stroke="#10b981"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </g>
-        )}
       </motion.svg>
     )
   }
@@ -149,11 +93,11 @@ export default function EggIcon({
         transition={{ type: 'spring', stiffness: 200 }}
       >
         <defs>
-          <linearGradient id="expiredGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" style={{ stopColor: color, stopOpacity: 0.6 }} />
             <stop offset="100%" style={{ stopColor: '#6b7280', stopOpacity: 0.6 }} />
           </linearGradient>
-          <filter id="glowExpired">
+          <filter id={glowId}>
             <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
             <feMerge>
               <feMergeNode in="coloredBlur"/>
@@ -163,71 +107,19 @@ export default function EggIcon({
         </defs>
 
         {/* Dimmed egg */}
-        <ellipse
-          cx="50"
-          cy="55"
-          rx="28"
-          ry="36"
-          fill="url(#expiredGrad)"
-          opacity="0.5"
-        />
+        <ellipse cx="50" cy="55" rx="28" ry="36" fill={`url(#${gradId})`} opacity="0.5" />
 
         {/* Clock overlay */}
-        <motion.g filter="url(#glowExpired)">
-          <motion.circle
-            cx="50"
-            cy="55"
-            r="18"
-            stroke={color}
-            strokeWidth="3"
-            fill="#0a0e17"
-            fillOpacity="0.8"
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            transition={{ duration: 0.3 }}
-          />
-          {/* Clock face marks */}
+        <motion.g filter={`url(#${glowId})`}>
+          <motion.circle cx="50" cy="55" r="18" stroke={color} strokeWidth="3" fill="#0a0e17" fillOpacity="0.8" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ duration: 0.3 }} />
           <line x1="50" y1="40" x2="50" y2="43" stroke={color} strokeWidth="2" />
           <line x1="50" y1="67" x2="50" y2="70" stroke={color} strokeWidth="2" />
           <line x1="35" y1="55" x2="38" y2="55" stroke={color} strokeWidth="2" />
           <line x1="62" y1="55" x2="65" y2="55" stroke={color} strokeWidth="2" />
-          {/* Clock hands */}
-          <motion.line
-            x1="50" y1="55" x2="50" y2="45"
-            stroke={color}
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            initial={{ rotate: -90, originX: '50px', originY: '55px' }}
-            animate={{ rotate: 0 }}
-            transition={{ delay: 0.3, duration: 0.4 }}
-          />
-          <motion.line
-            x1="50" y1="55" x2="58" y2="55"
-            stroke={color}
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            initial={{ rotate: -180, originX: '50px', originY: '55px' }}
-            animate={{ rotate: 0 }}
-            transition={{ delay: 0.4, duration: 0.3 }}
-          />
-          {/* Center dot */}
+          <motion.line x1="50" y1="55" x2="50" y2="45" stroke={color} strokeWidth="2.5" strokeLinecap="round" initial={{ rotate: -90, originX: '50px', originY: '55px' }} animate={{ rotate: 0 }} transition={{ delay: 0.3, duration: 0.4 }} />
+          <motion.line x1="50" y1="55" x2="58" y2="55" stroke={color} strokeWidth="2.5" strokeLinecap="round" initial={{ rotate: -180, originX: '50px', originY: '55px' }} animate={{ rotate: 0 }} transition={{ delay: 0.4, duration: 0.3 }} />
           <circle cx="50" cy="55" r="2" fill={color} />
         </motion.g>
-
-        {/* Health check badge */}
-        {isHealthCheck && (
-          <g>
-            <circle cx="72" cy="28" r="12" fill="#0a0e17" stroke="#f97316" strokeWidth="2" />
-            <path
-              d="M 64 28 L 68 28 L 70 23 L 74 33 L 76 25 L 78 28 L 80 28"
-              fill="none"
-              stroke="#f97316"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </g>
-        )}
       </motion.svg>
     )
   }
@@ -244,11 +136,11 @@ export default function EggIcon({
       transition={{ type: 'spring', stiffness: 200 }}
     >
       <defs>
-        <linearGradient id="eggGradIncubating" x1="0%" y1="0%" x2="100%" y2="100%">
+        <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
           <stop offset="0%" style={{ stopColor: getEggColor(), stopOpacity: 1 }} />
           <stop offset="100%" style={{ stopColor: '#3b82f6', stopOpacity: 1 }} />
         </linearGradient>
-        <filter id="glowIncubating">
+        <filter id={glowId}>
           <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
           <feMerge>
             <feMergeNode in="coloredBlur"/>
@@ -258,78 +150,25 @@ export default function EggIcon({
       </defs>
 
       {/* Outer glow */}
-      <ellipse
-        cx="50"
-        cy="55"
-        rx="32"
-        ry="40"
-        fill={getEggColor()}
-        opacity={getGlowIntensity()}
-        filter="url(#glowIncubating)"
-      />
+      <ellipse cx="50" cy="55" rx="32" ry="40" fill={getEggColor()} opacity={getGlowIntensity()} filter={`url(#${glowId})`} />
 
       {/* Main egg */}
-      <ellipse
-        cx="50"
-        cy="55"
-        rx="28"
-        ry="36"
-        fill="url(#eggGradIncubating)"
-      />
+      <ellipse cx="50" cy="55" rx="28" ry="36" fill={`url(#${gradId})`} />
 
       {/* Inner shadow */}
-      <ellipse
-        cx="50"
-        cy="55"
-        rx="23"
-        ry="31"
-        fill="#0a0e17"
-        opacity="0.25"
-      />
+      <ellipse cx="50" cy="55" rx="23" ry="31" fill="#0a0e17" opacity="0.25" />
 
       {/* Highlight */}
-      <ellipse
-        cx="42"
-        cy="42"
-        rx="7"
-        ry="9"
-        fill="white"
-        opacity="0.35"
-      />
+      <ellipse cx="42" cy="42" rx="7" ry="9" fill="white" opacity="0.35" />
 
       {/* Pulse ring for active incubation */}
       <motion.ellipse
-        cx="50"
-        cy="55"
-        rx="28"
-        ry="36"
-        fill="none"
-        stroke={getEggColor()}
-        strokeWidth="2"
+        cx="50" cy="55" rx="28" ry="36"
+        fill="none" stroke={getEggColor()} strokeWidth="2"
         initial={{ scale: 1, opacity: 0.5 }}
         animate={{ scale: 1.2, opacity: 0 }}
         transition={{ duration: 1.5, repeat: Infinity, ease: 'easeOut' }}
       />
-
-      {/* Health check badge */}
-      {isHealthCheck && (
-        <g>
-          {/* Badge circle */}
-          <circle cx="72" cy="28" r="14" fill="#0a0e17" stroke="#10b981" strokeWidth="2" />
-          {/* Heartbeat line */}
-          <motion.path
-            d="M 62 28 L 66 28 L 68 22 L 72 34 L 74 24 L 76 28 L 82 28"
-            fill="none"
-            stroke="#10b981"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            initial={{ pathLength: 0 }}
-            animate={{ pathLength: 1 }}
-            transition={{ duration: 0.8, delay: 0.3 }}
-          />
-        </g>
-      )}
     </motion.svg>
   )
 }

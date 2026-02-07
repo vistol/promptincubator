@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { X, PenTool, Play, HeartPulse } from 'lucide-react'
+import { X, PenTool, Play, HeartPulse, BarChart3, LineChart, Trophy } from 'lucide-react'
 import useStore from '../store/useStore'
 
 const actions = [
@@ -30,6 +30,24 @@ const actions = [
     bgColor: 'bg-accent-purple/10',
     borderColor: 'border-accent-purple/30',
   },
+  {
+    id: 'backtest',
+    label: 'Run Backtest',
+    description: 'Test a prompt against historical data',
+    icon: BarChart3,
+    color: 'accent-orange',
+    bgColor: 'bg-accent-orange/10',
+    borderColor: 'border-accent-orange/30',
+  },
+  {
+    id: 'benchmark',
+    label: 'Benchmark vs Classics',
+    description: 'Compare prompt vs Stochastic, VWAP, EMA...',
+    icon: Trophy,
+    color: 'accent-yellow',
+    bgColor: 'bg-accent-yellow/10',
+    borderColor: 'border-accent-yellow/30',
+  },
 ]
 
 export default function PromptActionModal() {
@@ -56,8 +74,19 @@ export default function PromptActionModal() {
         setNewPromptModalOpen(true)
         break
       case 'healthcheck':
-        // Switch to Health Checks tab on Prompts page
+        // Navigate to Prompts page > Health Checks tab and open modal
+        setActiveTab('prompts')
         useStore.setState({ promptsActiveTab: 'healthchecks', showHealthCheckModal: true })
+        break
+      case 'backtest':
+        // Navigate to Lab > Backtest tab
+        setActiveTab('lab')
+        useStore.setState({ labActiveTab: 'backtest' })
+        break
+      case 'benchmark':
+        // Navigate to Lab > Benchmark tab
+        setActiveTab('lab')
+        useStore.setState({ labActiveTab: 'benchmark' })
         break
       default:
         break

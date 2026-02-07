@@ -6,6 +6,8 @@ import HealthCheckModal from './HealthCheckModal'
 import HealthCheckReportSummary from './HealthCheckReportSummary'
 import HealthCheckEventLog from './HealthCheckEventLog'
 import EggIcon from './EggIcon'
+import HealthCheckIcon from './HealthCheckIcon'
+import { formatVariationLabel } from '../lib/healthCheckUtils'
 
 export default function HealthChecks() {
   const healthChecks = useStore((state) => state.healthChecks) || []
@@ -76,21 +78,8 @@ export default function HealthChecks() {
   const activeChecks = healthChecks.filter(check => check.isActive)
   const finalisedChecks = healthChecks.filter(check => !check.isActive)
 
-  // Format variation for display
-  const formatVariation = (variation) => {
-    return Object.entries(variation).map(([key, value]) => {
-      // Shorten key names
-      const shortKey = key
-        .replace('leverage', 'lev')
-        .replace('aiModel', 'ai')
-        .replace('executionTime', 'time')
-        .replace('targetPct', 'tp')
-        .replace('stopLoss', 'sl')
-        .replace('minIpe', 'ipe')
-        .replace('numResults', 'res')
-      return `${shortKey}:${value}`
-    }).join(' ')
-  }
+  // Format variation for display — uses centralized formatVariationLabel
+  const formatVariation = (variation) => formatVariationLabel(variation)
 
   // Get eggs related to a health check
   const getHealthCheckEggs = (check) => {
@@ -286,8 +275,8 @@ export default function HealthChecks() {
       <div className="space-y-3">
         {displayedChecks.length === 0 ? (
           <div className="text-center py-12">
-            <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-quant-surface flex items-center justify-center">
-              <HeartPulse size={32} className="text-gray-600" />
+            <div className="w-20 h-20 mx-auto mb-4 flex items-center justify-center overflow-visible">
+              <HealthCheckIcon size={64} active={false} />
             </div>
             <p className="text-gray-400 mb-2">
               {activeSubTab === 'active' ? 'No active health checks' : 'No finalised health checks'}
@@ -322,15 +311,9 @@ export default function HealthChecks() {
                     className="w-full p-4 text-left"
                   >
                     <div className="flex items-center gap-3">
-                      {/* Status Indicator */}
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                        check.isActive ? 'bg-accent-green/20' : 'bg-quant-surface'
-                      }`}>
-                        {check.isActive ? (
-                          <HeartPulse size={20} className="text-accent-green" />
-                        ) : (
-                          <Pause size={20} className="text-gray-500" />
-                        )}
+                      {/* Status Indicator — glowy health check icon */}
+                      <div className="w-12 h-12 flex items-center justify-center overflow-visible flex-shrink-0">
+                        <HealthCheckIcon size={48} active={check.isActive} />
                       </div>
 
                       {/* Content */}
@@ -665,16 +648,18 @@ export default function HealthChecks() {
                                       </div>
                                     </div>
 
-                                    <div className="flex items-center gap-2 p-2.5 bg-accent-yellow/10 border border-accent-yellow/20 rounded-xl">
-                                      <Shield size={14} className="text-accent-yellow shrink-0" />
-                                      <span className="text-xs text-gray-300">
-                                        Grace Period:{' '}
-                                        <span className="text-accent-yellow font-mono font-bold">
-                                          {settings.gracePeriodMinutes || 5}min
+                                    {settings.gracePeriodEnabled !== false && (
+                                      <div className="flex items-center gap-2 p-2.5 bg-accent-yellow/10 border border-accent-yellow/20 rounded-xl">
+                                        <Shield size={14} className="text-accent-yellow shrink-0" />
+                                        <span className="text-xs text-gray-300">
+                                          Grace Period:{' '}
+                                          <span className="text-accent-yellow font-mono font-bold">
+                                            {settings.gracePeriodMinutes || 5}min
+                                          </span>
+                                          {' '}de warmup
                                         </span>
-                                        {' '}de warmup
-                                      </span>
-                                    </div>
+                                      </div>
+                                    )}
 
                                     {check.prompts && check.prompts.length > 0 && (
                                       <div className="bg-quant-card rounded-xl p-3 border border-quant-border">

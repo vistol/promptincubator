@@ -1,7 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { X, Save, FileText, Check, AlertCircle, Type, AlignLeft, Lightbulb } from 'lucide-react'
+import { X, Save, FileText, Check, AlertCircle, Type, AlignLeft, Lightbulb, Cpu } from 'lucide-react'
 import useStore from '../store/useStore'
+
+const AI_MODELS = [
+  { id: 'google', label: 'Gemini', icon: '🔮' },
+  { id: 'groq', label: 'Groq', icon: '🚀' },
+  { id: 'sambanova', label: 'SambaNova', icon: '🧬' },
+  { id: 'anthropic', label: 'Claude', icon: '🧠' },
+  { id: 'openai', label: 'GPT-4', icon: '🤖' },
+  { id: 'xai', label: 'Grok', icon: '⚡' },
+]
 
 // Strategy writing tips
 const WRITING_TIPS = [
@@ -18,8 +27,10 @@ export default function PromptEditorModal({ prompt, onClose, onSave }) {
   const isEditing = !!prompt
   const textareaRef = useRef(null)
 
+  const settings = useStore((s) => s.settings)
   const [name, setName] = useState(prompt?.name || '')
   const [content, setContent] = useState(prompt?.content || '')
+  const [aiModel, setAiModel] = useState(prompt?.aiModel || settings?.aiProvider || 'google')
   const [isSaving, setIsSaving] = useState(false)
   const [showTips, setShowTips] = useState(false)
   const [lastSaved, setLastSaved] = useState(null)
@@ -44,6 +55,7 @@ export default function PromptEditorModal({ prompt, onClose, onSave }) {
     const promptData = {
       name: name.trim(),
       content: content.trim() || name.trim(),
+      aiModel,
       status: 'active'
     }
 
@@ -183,6 +195,34 @@ export default function PromptEditorModal({ prompt, onClose, onSave }) {
                   Name is required
                 </p>
               )}
+            </div>
+
+            {/* AI Model Selector */}
+            <div className="mb-6">
+              <label className="text-[10px] text-gray-500 uppercase tracking-wider flex items-center gap-1 mb-2">
+                <Cpu size={10} />
+                AI Model
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {AI_MODELS.map((model) => {
+                  const hasKey = !!settings?.apiKeys?.[model.id]
+                  return (
+                    <button
+                      key={model.id}
+                      onClick={() => setAiModel(model.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        aiModel === model.id
+                          ? 'bg-accent-cyan/10 border border-accent-cyan/30 text-accent-cyan'
+                          : hasKey
+                            ? 'bg-quant-surface border border-quant-border text-gray-400 hover:border-gray-500'
+                            : 'bg-quant-surface border border-quant-border text-gray-600 opacity-50'
+                      }`}
+                    >
+                      {model.icon} {model.label} {!hasKey && '🔒'}
+                    </button>
+                  )
+                })}
+              </div>
             </div>
 
             {/* Divider */}

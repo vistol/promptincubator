@@ -5,6 +5,15 @@ import { PIPELINE_STEPS, createPipelineEmitter, generateHash } from './execution
 // Minimum Risk/Reward ratio (Shell Calibration)
 const MIN_RISK_REWARD_RATIO = 2.0
 
+// Timeout utility - rejects if operation exceeds limit
+const withTimeout = (promise, ms, label = 'Operation') => {
+  let timeoutId
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${(ms / 1000).toFixed(0)}s`)), ms)
+  })
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId))
+}
+
 // Calculate R:R ratio
 export const calculateRiskReward = (entry, takeProfit, stopLoss, strategy) => {
   const entryPrice = parseFloat(entry)
@@ -65,9 +74,7 @@ const buildAIPrompt = (userPrompt, settings, prices, config) => {
     .map(([asset, price]) => `- ${asset}: $${price.toLocaleString()}`)
     .join('\n')
 
-  return `You are a quantitative trading analyst. Based on the user's trading strategy, generate exactly ${config.numResults || 3} trade signals.
-
-## USER'S TRADING STRATEGY:
+  return `## USER'S TRADING STRATEGY:
 ${userPrompt.content}
 
 ## CURRENT MARKET PRICES (Real-time from Binance):
@@ -117,38 +124,93 @@ Each trade must have this exact structure:
 1. Select assets based on the user's strategy - use market prices above as reference for realistic entry levels
 2. Entry price should be very close to current market price (within 0.5%)
 3. TP and SL must follow the user's configuration (target profit %, leverage, capital)
-4. Risk:Reward ratio must be at least 2:1
-5. IPE score (Investment Potential Estimate) should be 70-95 based on setup quality
-6. Reasoning must explain HOW the user's strategy applies to this specific trade
-7. Strategy must be either "LONG" or "SHORT"
-8. All prices must be numbers (not strings)
+4. Reasoning must explain HOW the user's strategy applies to this specific trade
+5. Strategy must be either "LONG" or "SHORT"
+6. All prices must be numbers (not strings)
 
 Generate ${config.numResults || 3} trades now:`
+}
+
+// Attempt to repair truncated JSON from AI (e.g., when output was cut by MAX_TOKENS)
+// Strategy: find complete trade objects in the truncated array and discard the incomplete last one
+const repairTruncatedJSON = (truncated) => {
+  // Find all complete JSON objects (matching { ... }) within the array
+  const completeObjects = []
+  let depth = 0
+  let objectStart = -1
+
+  for (let i = 0; i < truncated.length; i++) {
+    const char = truncated[i]
+    if (char === '{') {
+      if (depth === 0) objectStart = i
+      depth++
+    } else if (char === '}') {
+      depth--
+      if (depth === 0 && objectStart !== -1) {
+        completeObjects.push(truncated.substring(objectStart, i + 1))
+        objectStart = -1
+      }
+    }
+  }
+
+  if (completeObjects.length === 0) {
+    throw new Error('Respuesta truncada del modelo — no se encontro ningun trade completo')
+  }
+
+  console.warn(`Repaired truncated JSON: recovered ${completeObjects.length} complete trade(s)`)
+  return `[${completeObjects.join(',')}]`
 }
 
 // Parse AI response to extract trades
 const parseAIResponse = (responseText, prices, config) => {
   try {
+    if (!responseText || typeof responseText !== 'string') {
+      throw new Error(`Respuesta vacia o invalida del modelo (tipo: ${typeof responseText})`)
+    }
+
     // Try to extract JSON from the response
     let jsonStr = responseText.trim()
 
-    // Remove markdown code blocks if present
+    // Remove markdown code blocks if present (handle multiple closing backticks)
     if (jsonStr.startsWith('```json')) {
-      jsonStr = jsonStr.replace(/^```json\s*/, '').replace(/\s*```$/, '')
+      jsonStr = jsonStr.replace(/^```json\s*/, '').replace(/```\s*$/, '')
     } else if (jsonStr.startsWith('```')) {
-      jsonStr = jsonStr.replace(/^```\s*/, '').replace(/\s*```$/, '')
+      jsonStr = jsonStr.replace(/^```\s*/, '').replace(/```\s*$/, '')
     }
 
     // Find JSON array in the response
     const jsonMatch = jsonStr.match(/\[[\s\S]*\]/)
-    if (jsonMatch) {
+    if (!jsonMatch) {
+      // Try to detect truncated JSON (starts with [ but no closing ])
+      const truncatedMatch = jsonStr.match(/\[[\s\S]+/)
+      if (truncatedMatch) {
+        // Attempt to repair truncated JSON by closing open braces/brackets
+        jsonStr = repairTruncatedJSON(truncatedMatch[0])
+        console.warn('Detected truncated JSON response — attempting repair')
+      } else {
+        const preview = jsonStr.substring(0, 200)
+        throw new Error(`No se encontro JSON array en la respuesta. Inicio: "${preview}..."`)
+      }
+    } else {
       jsonStr = jsonMatch[0]
     }
 
-    const trades = JSON.parse(jsonStr)
+    let trades
+    try {
+      trades = JSON.parse(jsonStr)
+    } catch (jsonErr) {
+      const errorPos = jsonErr.message.match(/position (\d+)/)
+      const pos = errorPos ? parseInt(errorPos[1]) : 0
+      const context = jsonStr.substring(Math.max(0, pos - 50), pos + 50)
+      throw new Error(`JSON invalido cerca de posicion ${pos}: "${context}" — ${jsonErr.message}`)
+    }
 
     if (!Array.isArray(trades)) {
-      throw new Error('Response is not an array')
+      throw new Error(`Respuesta no es un array (tipo: ${typeof trades})`)
+    }
+
+    if (trades.length === 0) {
+      throw new Error('El modelo devolvio un array vacio')
     }
 
     // Validate and enhance each trade
@@ -317,6 +379,24 @@ const callClaudeAPI = async (prompt, apiKey, model = 'claude-sonnet-4-20250514')
 const callGeminiAPI = async (prompt, apiKey, model = 'gemini-2.5-flash') => {
   console.log(`Calling Gemini API with model: ${model}`)
 
+  // Gemini 2.5 Flash is a "thinking" model — thinking tokens are separate from output tokens.
+  // We set a thinking budget so it doesn't consume all output capacity.
+  const isThinkingModel = model.includes('2.5')
+
+  const generationConfig = {
+    temperature: 0.7,
+    topK: 40,
+    topP: 0.95,
+    maxOutputTokens: 8192
+  }
+
+  // For thinking models, configure thinking budget to prevent output truncation
+  if (isThinkingModel) {
+    generationConfig.thinkingConfig = {
+      thinkingBudget: 1024
+    }
+  }
+
   // Gemini API supports direct browser calls with API key in URL
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
@@ -325,12 +405,7 @@ const callGeminiAPI = async (prompt, apiKey, model = 'gemini-2.5-flash') => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.7,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens: 2048
-        }
+        generationConfig
       })
     }
   )
@@ -346,11 +421,27 @@ const callGeminiAPI = async (prompt, apiKey, model = 'gemini-2.5-flash') => {
 
   const data = await response.json()
 
-  if (!data.candidates?.[0]?.content?.parts?.[0]?.text) {
-    throw new Error('No response from Gemini')
+  const candidate = data.candidates?.[0]
+  if (!candidate?.content?.parts?.[0]?.text) {
+    const blockReason = candidate?.finishReason || data.promptFeedback?.blockReason || 'unknown'
+    throw new Error(`No response from Gemini (reason: ${blockReason})`)
   }
 
-  return data.candidates[0].content.parts[0].text
+  // Check if response was truncated due to token limit
+  if (candidate.finishReason === 'MAX_TOKENS') {
+    console.warn('Gemini response truncated (MAX_TOKENS) — response may be incomplete')
+  }
+
+  // Extract text from all parts (thinking models may return multiple parts)
+  const textParts = candidate.content.parts
+    .filter(p => p.text && !p.thought)
+    .map(p => p.text)
+
+  if (textParts.length === 0) {
+    throw new Error('Gemini solo devolvio thinking tokens, sin respuesta de texto')
+  }
+
+  return textParts.join('')
 }
 
 // Call OpenAI API
@@ -494,17 +585,107 @@ const callGrokAPI = async (prompt, apiKey) => {
   return data.choices[0].message.content
 }
 
+// Call Groq API (OpenAI-compatible, supports CORS natively)
+const callGroqAPI = async (prompt, apiKey) => {
+  console.log('Calling Groq API (direct - Groq supports CORS)...')
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: 'You are a quantitative trading analyst. Always respond with valid JSON only.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.7,
+      max_tokens: 2048
+    })
+  })
+
+  if (!response.ok) {
+    let errorMsg = `Groq API error: ${response.status}`
+    try {
+      const error = await response.json()
+      errorMsg = error.error?.message || errorMsg
+    } catch (e) {}
+    throw new Error(errorMsg)
+  }
+
+  const data = await response.json()
+
+  if (!data.choices?.[0]?.message?.content) {
+    throw new Error('No response from Groq')
+  }
+
+  return data.choices[0].message.content
+}
+
+// Call SambaNova API (OpenAI-compatible, supports CORS natively)
+const callSambaNovaAPI = async (prompt, apiKey) => {
+  console.log('Calling SambaNova API (direct - SambaNova supports CORS)...')
+
+  const response = await fetch('https://api.sambanova.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: 'Meta-Llama-3.1-405B-Instruct',
+      messages: [
+        { role: 'system', content: 'You are a quantitative trading analyst. Always respond with valid JSON only.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.7,
+      max_tokens: 2048
+    })
+  })
+
+  if (!response.ok) {
+    let errorMsg = `SambaNova API error: ${response.status}`
+    try {
+      const error = await response.json()
+      errorMsg = error.error?.message || errorMsg
+    } catch (e) {}
+    throw new Error(errorMsg)
+  }
+
+  const data = await response.json()
+
+  if (!data.choices?.[0]?.message?.content) {
+    throw new Error('No response from SambaNova')
+  }
+
+  return data.choices[0].message.content
+}
+
+// Map model aliases to canonical API key names
+const MODEL_TO_PROVIDER = {
+  gemini: 'google', 'gemini-2.5-flash': 'google', 'gemini-2.0-flash': 'google', 'gemini-2.5-flash-lite': 'google', 'gemini-2.5-pro': 'google',
+  claude: 'anthropic', 'claude-sonnet-4-20250514': 'anthropic', 'claude-3-5-sonnet-20241022': 'anthropic', 'claude-3-haiku-20240307': 'anthropic',
+  gpt4: 'openai', 'gpt-4': 'openai', 'gpt-4-turbo': 'openai', 'gpt-3.5-turbo': 'openai',
+  grok: 'xai', 'grok-3-mini': 'xai', 'grok-3': 'xai',
+  groq: 'groq', 'llama-3.3-70b-versatile': 'groq', 'llama-3.1-8b-instant': 'groq',
+  sambanova: 'sambanova', 'Meta-Llama-3.1-405B-Instruct': 'sambanova', 'Meta-Llama-3.1-70B-Instruct': 'sambanova'
+}
+
 // AI provider display names
 const AI_PROVIDER_NAMES = {
   anthropic: 'Claude Sonnet 4',
   google: 'Gemini 2.5 Flash',
   openai: 'GPT-4',
-  xai: 'Grok 3'
+  xai: 'Grok 3',
+  groq: 'Groq (Llama 3.3 70B)',
+  sambanova: 'SambaNova (Llama 3.1 405B)'
 }
 
 // Main function to generate trades from prompt using AI
 // onPipelineEvent: optional callback (event, currentStep) => void for real-time pipeline tracking
-export const generateTradesFromPrompt = async (prompt, settings, numResults = 3, onPipelineEvent = null) => {
+export const generateTradesFromPrompt = async (prompt, settings, numResults = 3, onPipelineEvent = null, overridePrices = null) => {
   // Create pipeline emitter (no-op if no callback)
   const emitter = onPipelineEvent
     ? createPipelineEmitter(onPipelineEvent)
@@ -519,7 +700,9 @@ export const generateTradesFromPrompt = async (prompt, settings, numResults = 3,
   })
 
   // Use the AI provider from the prompt (selected in modal) or fall back to settings
-  const aiProvider = prompt.aiModel || settings.aiProvider || 'google'
+  // Map model aliases (e.g. 'gemini') to canonical API key names (e.g. 'google')
+  const rawProvider = prompt.aiModel || settings.aiProvider || 'google'
+  const aiProvider = MODEL_TO_PROVIDER[rawProvider] || rawProvider
   const providerName = AI_PROVIDER_NAMES[aiProvider] || aiProvider
 
   // Check for API key using the correct provider
@@ -531,14 +714,19 @@ export const generateTradesFromPrompt = async (prompt, settings, numResults = 3,
   }
 
   // STEP: FETCH PRICES
-  emitter.emit(PIPELINE_STEPS.FETCH_PRICES, 'started', 'Solicitando precios a Binance...')
-
-  // Fetch all available asset prices so the AI can choose based on the user's strategy
-  const realPrices = await fetchRealPrices(CRYPTO_ASSETS)
+  // If overridePrices is provided (walk-forward backtest), use those instead of live prices
+  let realPrices
+  if (overridePrices && Object.keys(overridePrices).length > 0) {
+    emitter.emit(PIPELINE_STEPS.FETCH_PRICES, 'started', 'Usando precios historicos (walk-forward)...')
+    realPrices = overridePrices
+  } else {
+    emitter.emit(PIPELINE_STEPS.FETCH_PRICES, 'started', 'Solicitando precios a Binance...')
+    realPrices = await fetchRealPrices(CRYPTO_ASSETS)
+  }
 
   if (!realPrices || Object.keys(realPrices).length === 0) {
-    emitter.emit(PIPELINE_STEPS.FETCH_PRICES, 'error', 'No se pudieron obtener precios de Binance')
-    throw new Error('Failed to fetch real-time prices from Binance. Please try again.')
+    emitter.emit(PIPELINE_STEPS.FETCH_PRICES, 'error', 'No se pudieron obtener precios')
+    throw new Error('Failed to get prices. Please try again.')
   }
 
   // Generate hash for price data integrity
@@ -608,6 +796,12 @@ export const generateTradesFromPrompt = async (prompt, settings, numResults = 3,
       case 'xai':
         aiResponse = await callGrokAPI(aiPrompt, apiKey)
         break
+      case 'groq':
+        aiResponse = await callGroqAPI(aiPrompt, apiKey)
+        break
+      case 'sambanova':
+        aiResponse = await callSambaNovaAPI(aiPrompt, apiKey)
+        break
       default:
         emitter.emit(PIPELINE_STEPS.ERROR, 'error', `Proveedor desconocido: ${aiProvider}`)
         throw new Error(`Unknown AI provider: ${aiProvider}`)
@@ -629,24 +823,40 @@ export const generateTradesFromPrompt = async (prompt, settings, numResults = 3,
   })
 
   // STEP: PARSE TRADES
-  // Re-fetch fresh prices to validate against current data (not stale prices from pipeline start)
+  // Re-fetch fresh prices to validate — but skip if using override prices (walk-forward backtest)
   let pricesToUse = realPrices
-  try {
-    const freshPrices = await fetchRealPrices(Object.keys(realPrices))
-    if (freshPrices && Object.keys(freshPrices).length > 0) {
-      pricesToUse = freshPrices
-      emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'started', 'Precios refrescados para validacion')
-    } else {
-      emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'started', 'Usando precios originales (re-fetch sin datos)')
+  if (!overridePrices) {
+    try {
+      const freshPrices = await withTimeout(
+        fetchRealPrices(Object.keys(realPrices)),
+        10000,
+        'Price re-fetch'
+      )
+      if (freshPrices && Object.keys(freshPrices).length > 0) {
+        pricesToUse = freshPrices
+        emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'started', 'Precios refrescados para validacion')
+      } else {
+        emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'started', 'Usando precios originales (re-fetch sin datos)')
+      }
+    } catch (priceErr) {
+      console.warn('Price re-fetch failed, using original prices:', priceErr.message)
+      emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'started', `Usando precios originales (${priceErr.message})`)
     }
-  } catch (priceErr) {
-    console.warn('Price re-fetch failed, using original prices:', priceErr.message)
-    emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'started', 'Usando precios originales (re-fetch fallido)')
+  } else {
+    emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'started', 'Validando trades con precios historicos...')
   }
 
-  const trades = parseAIResponse(aiResponse, pricesToUse, config)
+  let trades
+  try {
+    trades = parseAIResponse(aiResponse, pricesToUse, config)
+  } catch (parseErr) {
+    console.error('Parse trades failed:', parseErr.message)
+    console.error('Raw AI response (first 500 chars):', aiResponse?.substring(0, 500))
+    emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'error', `Error parseando respuesta: ${parseErr.message}`)
+    throw new Error(`Failed to parse AI response: ${parseErr.message}`)
+  }
 
-  if (trades.length === 0) {
+  if (!trades || trades.length === 0) {
     emitter.emit(PIPELINE_STEPS.PARSE_TRADES, 'error', 'La IA no genero trades validos')
     throw new Error('AI did not generate any valid trades. Please try again.')
   }
@@ -869,6 +1079,50 @@ export const testAPIConnection = async (providerId, apiKey) => {
           throw new Error(error.error?.message || `HTTP ${response.status}`)
         }
         return { success: true, message: 'Grok API connected successfully!' }
+      }
+
+      case 'groq': {
+        // Groq supports CORS natively - direct browser call
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: 'llama-3.3-70b-versatile',
+            max_tokens: 10,
+            messages: [{ role: 'user', content: 'Hi' }]
+          })
+        })
+
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}))
+          throw new Error(error.error?.message || `HTTP ${response.status}`)
+        }
+        return { success: true, message: 'Groq API connected successfully!' }
+      }
+
+      case 'sambanova': {
+        // SambaNova supports CORS - direct browser call
+        const response = await fetch('https://api.sambanova.ai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: 'Meta-Llama-3.1-405B-Instruct',
+            max_tokens: 10,
+            messages: [{ role: 'user', content: 'Hi' }]
+          })
+        })
+
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}))
+          throw new Error(error.error?.message || `HTTP ${response.status}`)
+        }
+        return { success: true, message: 'SambaNova API connected successfully!' }
       }
 
       default:

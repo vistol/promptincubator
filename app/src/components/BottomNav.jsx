@@ -1,10 +1,11 @@
 import { motion } from 'framer-motion'
-import { Egg, Radio, Wand2, Settings } from 'lucide-react'
+import { Egg, Radio, Wand2, Settings, FlaskConical } from 'lucide-react'
 import useStore from '../store/useStore'
 
 const tabs = [
   { id: 'prompts', label: 'Prompts', icon: Wand2 },
   { id: 'incubator', label: 'Incubator', icon: Egg },
+  { id: 'lab', label: 'Lab', icon: FlaskConical },
   { id: 'signals', label: 'Signals', icon: Radio },
   { id: 'settings', label: 'Settings', icon: Settings },
 ]
@@ -19,7 +20,7 @@ export default function BottomNav() {
       <div className="relative flex justify-around items-center h-16 max-w-lg mx-auto px-2">
         <motion.div
           className="absolute top-0 w-8 h-0.5 bg-accent-cyan rounded-full"
-          animate={{ left: `calc(${(activeIndex + 0.5) * 25}% - 1rem)` }}
+          animate={{ left: `calc(${(activeIndex + 0.5) * 20}% - 1rem)` }}
           transition={{ type: 'spring', stiffness: 500, damping: 30 }}
         />
         {tabs.map((tab) => {
@@ -50,7 +51,7 @@ export default function BottomNav() {
                   />
                 )}
                 <Icon
-                  size={24}
+                  size={22}
                   className={`relative z-10 transition-colors duration-200 ${
                     isActive ? 'text-accent-cyan' : 'text-gray-500'
                   }`}

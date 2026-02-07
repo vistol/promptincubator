@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Cpu, FileText, Database, ChevronRight, Eye, EyeOff, Check, X, AlertCircle, Edit3, Plus, ChevronDown, ChevronUp, Cloud, RefreshCw, Download, Upload, Activity, TrendingUp, Trash2, Link, Unlink, Info, Egg, BarChart3, ScrollText, Zap, Timer, Shield, LogOut, User } from 'lucide-react'
+import { Cpu, FileText, Database, ChevronRight, Eye, EyeOff, Check, X, AlertCircle, Edit3, Plus, ChevronDown, ChevronUp, Cloud, RefreshCw, Download, Upload, Activity, TrendingUp, Trash2, Link, Unlink, Info, Egg, BarChart3, ScrollText, Zap, Timer, Shield, LogOut, User, Stethoscope } from 'lucide-react'
 import useStore from '../store/useStore'
 import Header from '../components/Header'
 import PromptEditorModal from '../components/PromptEditorModal'
 import { testAPIConnection } from '../lib/aiService'
 
-const tabs = ['AI Provider', 'Prompts', 'System']
+const tabs = ['APIs', 'Prompts', 'System']
 
 const tradingPlatforms = [
   {
@@ -61,6 +61,24 @@ const aiProviders = [
     color: 'from-orange-500 to-red-500',
     apiUrl: 'https://console.x.ai/',
     apiLabel: 'Get API key from xAI Console'
+  },
+  {
+    id: 'groq',
+    name: 'Groq',
+    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
+    icon: '🚀',
+    color: 'from-purple-500 to-pink-500',
+    apiUrl: 'https://console.groq.com/keys',
+    apiLabel: 'Get free API key from Groq Console'
+  },
+  {
+    id: 'sambanova',
+    name: 'SambaNova',
+    models: ['Meta-Llama-3.1-405B-Instruct', 'Meta-Llama-3.1-70B-Instruct'],
+    icon: '🧬',
+    color: 'from-green-500 to-teal-500',
+    apiUrl: 'https://cloud.sambanova.ai',
+    apiLabel: 'Get free API key from SambaNova Cloud'
   }
 ]
 
@@ -85,6 +103,7 @@ export default function Settings() {
     getDataCounts,
     eggs,
     signals,
+    healthChecks,
     settingsActiveTab,
     setSettingsActiveTab,
     user,
@@ -147,6 +166,7 @@ export default function Settings() {
     deletePrompts: false,
     deleteEggs: false,
     deleteSignals: false,
+    deleteHealthChecks: false,
     deleteLogs: false,
     resetOnboarding: false,
     keepLinkedData: true
@@ -204,6 +224,19 @@ export default function Settings() {
       }
     }
 
+    if (deleteOptions.deleteHealthChecks) {
+      impact.push(`${dataCounts.healthChecks} health checks`)
+      // Health checks cascade to their eggs
+      const healthCheckEggs = eggs.filter(e => e.healthCheckId)
+      if (healthCheckEggs.length > 0) {
+        warnings.push(`${healthCheckEggs.length} eggs created by health checks will also be deleted`)
+        const healthCheckSignals = healthCheckEggs.flatMap(e => e.trades)
+        if (healthCheckSignals.length > 0) {
+          warnings.push(`${healthCheckSignals.length} signals from those eggs will also be deleted`)
+        }
+      }
+    }
+
     if (deleteOptions.deleteLogs) {
       impact.push(`${dataCounts.activityLogs} activity logs`)
     }
@@ -215,27 +248,27 @@ export default function Settings() {
     return { impact, warnings }
   }
 
-  const handleSelectiveDelete = () => {
-    const result = resetSelectiveData(deleteOptions)
-    setDeleteResult(result)
+  const handleSelectiveDelete = async () => {
+    setIsResetting(true)
     setShowResetConfirm(false)
 
-    // Reset options after delete
-    setTimeout(() => {
-      setDeleteOptions({
-        deletePrompts: false,
-        deleteEggs: false,
-        deleteSignals: false,
-        deleteLogs: false,
-        resetOnboarding: false,
-        keepLinkedData: true
-      })
-      setDeleteResult(null)
-    }, 3000)
+    try {
+      // resetSelectiveData is now async and will reload the page
+      // This call may not return if page reloads
+      await resetSelectiveData(deleteOptions)
+    } catch (err) {
+      console.error('Selective delete failed:', err)
+      setDeleteResult({ error: err.message })
+      setIsResetting(false)
+    }
+
+    // Note: The page will reload after successful deletion,
+    // so the code below won't run in most cases
   }
 
   const anyDeleteSelected = deleteOptions.deletePrompts || deleteOptions.deleteEggs ||
-    deleteOptions.deleteSignals || deleteOptions.deleteLogs || deleteOptions.resetOnboarding
+    deleteOptions.deleteSignals || deleteOptions.deleteHealthChecks ||
+    deleteOptions.deleteLogs || deleteOptions.resetOnboarding
 
   const testSupabaseConnection = async () => {
     setTestingConnection(true)
@@ -446,6 +479,134 @@ export default function Settings() {
                     )}
                   </button>
                 ))}
+              </div>
+
+              {/* Supabase Cloud Database */}
+              <div className="bg-quant-card border border-quant-border rounded-xl p-4 mt-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 rounded-lg bg-accent-cyan/20">
+                    <Database size={20} className="text-accent-cyan" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-white">Supabase</h3>
+                    <span className="text-xs text-gray-500">Cloud database for data sync</span>
+                  </div>
+                  {settings.supabase.connected && (
+                    <div className="ml-auto flex items-center gap-1 text-accent-green text-xs">
+                      <Check size={14} />
+                      Connected
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-2">Project URL</label>
+                    <input
+                      type="text"
+                      value={settings.supabase.url || ''}
+                      onChange={(e) => updateSupabase({ url: e.target.value, connected: false })}
+                      placeholder="https://xxx.supabase.co"
+                      className="w-full bg-quant-surface border border-quant-border rounded-lg px-4 py-2.5 text-white text-sm font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-2">Anon Key</label>
+                    <input
+                      type="password"
+                      value={settings.supabase.anonKey || ''}
+                      onChange={(e) => updateSupabase({ anonKey: e.target.value, connected: false })}
+                      placeholder="eyJhbGci..."
+                      className="w-full bg-quant-surface border border-quant-border rounded-lg px-4 py-2.5 text-white text-sm font-mono"
+                    />
+                  </div>
+
+                  <button
+                    onClick={testSupabaseConnection}
+                    disabled={testingConnection}
+                    className={`w-full py-3 rounded-xl font-medium transition-all ${
+                      testingConnection
+                        ? 'bg-quant-surface text-gray-400'
+                        : 'bg-accent-cyan/20 text-accent-cyan hover:bg-accent-cyan/30'
+                    }`}
+                  >
+                    {testingConnection ? 'Testing Connection...' : 'Test Connection'}
+                  </button>
+
+                  {connectionResult && (
+                    <div className={`flex items-center gap-2 p-3 rounded-lg ${
+                      connectionResult === 'success'
+                        ? 'bg-accent-green/20 text-accent-green'
+                        : 'bg-accent-red/20 text-accent-red'
+                    }`}>
+                      {connectionResult === 'success' ? (
+                        <>
+                          <Check size={16} />
+                          <span className="text-sm">Connection successful!</span>
+                        </>
+                      ) : (
+                        <>
+                          <AlertCircle size={16} />
+                          <span className="text-sm">Connection failed. Check your credentials.</span>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Sync Actions */}
+                  {settings.supabase.url && settings.supabase.anonKey && (
+                    <div className="pt-4 border-t border-quant-border space-y-3">
+                      <h4 className="text-xs text-gray-400 uppercase tracking-wider">Data Sync</h4>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          onClick={() => syncToCloud()}
+                          disabled={syncStatus.syncing}
+                          className="flex items-center justify-center gap-2 py-3 rounded-xl bg-quant-surface border border-quant-border text-gray-400 hover:text-white hover:border-accent-cyan/50 transition-all disabled:opacity-50"
+                        >
+                          {syncStatus.syncing ? (
+                            <RefreshCw size={16} className="animate-spin" />
+                          ) : (
+                            <Upload size={16} />
+                          )}
+                          <span className="text-sm">Push to Cloud</span>
+                        </button>
+
+                        <button
+                          onClick={() => loadFromCloud()}
+                          disabled={syncStatus.loading}
+                          className="flex items-center justify-center gap-2 py-3 rounded-xl bg-quant-surface border border-quant-border text-gray-400 hover:text-white hover:border-accent-cyan/50 transition-all disabled:opacity-50"
+                        >
+                          {syncStatus.loading ? (
+                            <RefreshCw size={16} className="animate-spin" />
+                          ) : (
+                            <Download size={16} />
+                          )}
+                          <span className="text-sm">Pull from Cloud</span>
+                        </button>
+                      </div>
+
+                      {/* Sync Status */}
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-gray-500">Last synced:</span>
+                        <span className="text-gray-400 font-mono">
+                          {syncStatus.lastSynced
+                            ? new Date(syncStatus.lastSynced).toLocaleString()
+                            : 'Never'
+                          }
+                        </span>
+                      </div>
+
+                      {syncStatus.error && (
+                        <div className="flex items-center gap-2 p-2 rounded-lg bg-accent-red/20 text-accent-red text-xs">
+                          <AlertCircle size={14} />
+                          <span>{syncStatus.error}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </motion.div>
           )}
@@ -662,270 +823,101 @@ export default function Settings() {
               {/* Grace Period (Warmup) */}
               <div className="bg-quant-card border border-quant-border rounded-xl p-4">
                 <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 rounded-lg bg-accent-yellow/20">
-                    <Timer size={20} className="text-accent-yellow" />
+                  <div className={`p-2 rounded-lg ${settings.gracePeriodEnabled !== false ? 'bg-accent-yellow/20' : 'bg-gray-700/50'}`}>
+                    <Timer size={20} className={settings.gracePeriodEnabled !== false ? 'text-accent-yellow' : 'text-gray-500'} />
                   </div>
                   <div className="flex-1">
                     <h3 className="font-semibold text-white">Grace Period</h3>
                     <span className="text-xs text-gray-500">Warmup antes de activar TP/SL</span>
                   </div>
-                  <span className="text-sm font-mono text-accent-yellow">
-                    {settings.gracePeriodMinutes || 5}min
-                  </span>
-                </div>
-
-                {/* Info Box */}
-                <div className="p-3 bg-accent-yellow/10 border border-accent-yellow/20 rounded-xl mb-4">
-                  <div className="flex items-start gap-2">
-                    <Shield size={14} className="text-accent-yellow shrink-0 mt-0.5" />
-                    <p className="text-xs text-gray-300">
-                      Tras crear un egg, los trades mostraran precios y PnL en tiempo real
-                      pero <span className="text-white font-medium">NO se cerraran</span> por
-                      TP/SL durante este periodo. Esto previene cierres prematuros por
-                      volatilidad inicial.
-                    </p>
-                  </div>
-                </div>
-
-                {/* Preset Buttons */}
-                <div className="flex gap-2 mb-3">
-                  {[
-                    { min: 2, label: '2m' },
-                    { min: 5, label: '5m' },
-                    { min: 15, label: '15m' },
-                    { min: 30, label: '30m' },
-                    { min: 60, label: '1h' },
-                  ].map((preset) => (
-                    <button
-                      key={preset.min}
-                      onClick={() => updateSettings({ gracePeriodMinutes: preset.min })}
-                      className={`flex-1 py-2.5 rounded-lg text-xs font-mono transition-all ${
-                        (settings.gracePeriodMinutes || 5) === preset.min
-                          ? 'bg-accent-yellow/20 text-accent-yellow border border-accent-yellow/30'
-                          : 'bg-quant-surface text-gray-400 border border-transparent'
-                      }`}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Slider */}
-                <input
-                  type="range"
-                  min={1}
-                  max={120}
-                  value={settings.gracePeriodMinutes || 5}
-                  onChange={(e) => updateSettings({ gracePeriodMinutes: Number(e.target.value) })}
-                  className="w-full h-1.5 accent-yellow-500"
-                />
-                <div className="flex justify-between mt-1 text-[9px] text-gray-600">
-                  <span>1 min</span>
-                  <span>120 min</span>
-                </div>
-
-                {/* Current Setting */}
-                <div className="mt-3 p-2 bg-quant-surface rounded-lg text-center">
-                  <span className="text-xs text-gray-400">
-                    Trades protegidos durante{' '}
-                    <span className="text-accent-yellow font-mono font-bold">
-                      {settings.gracePeriodMinutes || 5} minutos
+                  {settings.gracePeriodEnabled !== false && (
+                    <span className="text-sm font-mono text-accent-yellow mr-2">
+                      {settings.gracePeriodMinutes || 5}min
                     </span>
-                    {' '}tras su creacion
-                  </span>
-                </div>
-              </div>
-
-              {/* Supabase */}
-              <div className="bg-quant-card border border-quant-border rounded-xl p-4">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 rounded-lg bg-accent-cyan/20">
-                    <Database size={20} className="text-accent-cyan" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-white">Supabase</h3>
-                    <span className="text-xs text-gray-500">Cloud database connection</span>
-                  </div>
-                  {settings.supabase.connected && (
-                    <div className="ml-auto flex items-center gap-1 text-accent-green text-xs">
-                      <Check size={14} />
-                      Connected
-                    </div>
                   )}
-                </div>
-
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-xs text-gray-400 block mb-2">Project URL</label>
-                    <input
-                      type="text"
-                      value={settings.supabase.url || ''}
-                      onChange={(e) => updateSupabase({ url: e.target.value, connected: false })}
-                      placeholder="https://xxx.supabase.co"
-                      className="w-full bg-quant-surface border border-quant-border rounded-lg px-4 py-2.5 text-white text-sm font-mono"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-xs text-gray-400 block mb-2">Anon Key</label>
-                    <input
-                      type="password"
-                      value={settings.supabase.anonKey || ''}
-                      onChange={(e) => updateSupabase({ anonKey: e.target.value, connected: false })}
-                      placeholder="eyJhbGci..."
-                      className="w-full bg-quant-surface border border-quant-border rounded-lg px-4 py-2.5 text-white text-sm font-mono"
-                    />
-                  </div>
-
+                  {/* Toggle Switch */}
                   <button
-                    onClick={testSupabaseConnection}
-                    disabled={testingConnection}
-                    className={`w-full py-3 rounded-xl font-medium transition-all ${
-                      testingConnection
-                        ? 'bg-quant-surface text-gray-400'
-                        : 'bg-accent-cyan/20 text-accent-cyan hover:bg-accent-cyan/30'
+                    onClick={() => updateSettings({ gracePeriodEnabled: !(settings.gracePeriodEnabled !== false) })}
+                    className={`relative w-11 h-6 rounded-full transition-colors ${
+                      settings.gracePeriodEnabled !== false ? 'bg-accent-yellow' : 'bg-gray-600'
                     }`}
                   >
-                    {testingConnection ? 'Testing Connection...' : 'Test Connection'}
+                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform ${
+                      settings.gracePeriodEnabled !== false ? 'translate-x-5' : 'translate-x-0'
+                    }`} />
                   </button>
+                </div>
 
-                  {connectionResult && (
-                    <div className={`flex items-center gap-2 p-3 rounded-lg ${
-                      connectionResult === 'success'
-                        ? 'bg-accent-green/20 text-accent-green'
-                        : 'bg-accent-red/20 text-accent-red'
-                    }`}>
-                      {connectionResult === 'success' ? (
-                        <>
-                          <Check size={16} />
-                          <span className="text-sm">Connection successful!</span>
-                        </>
-                      ) : (
-                        <>
-                          <AlertCircle size={16} />
-                          <span className="text-sm">Connection failed. Check your credentials.</span>
-                        </>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Sync Actions */}
-                  {settings.supabase.url && settings.supabase.anonKey && (
-                    <div className="pt-4 border-t border-quant-border space-y-3">
-                      <h4 className="text-xs text-gray-400 uppercase tracking-wider">Data Sync</h4>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <button
-                          onClick={() => syncToCloud()}
-                          disabled={syncStatus.syncing}
-                          className="flex items-center justify-center gap-2 py-3 rounded-xl bg-quant-surface border border-quant-border text-gray-400 hover:text-white hover:border-accent-cyan/50 transition-all disabled:opacity-50"
-                        >
-                          {syncStatus.syncing ? (
-                            <RefreshCw size={16} className="animate-spin" />
-                          ) : (
-                            <Upload size={16} />
-                          )}
-                          <span className="text-sm">Push to Cloud</span>
-                        </button>
-
-                        <button
-                          onClick={() => loadFromCloud()}
-                          disabled={syncStatus.loading}
-                          className="flex items-center justify-center gap-2 py-3 rounded-xl bg-quant-surface border border-quant-border text-gray-400 hover:text-white hover:border-accent-cyan/50 transition-all disabled:opacity-50"
-                        >
-                          {syncStatus.loading ? (
-                            <RefreshCw size={16} className="animate-spin" />
-                          ) : (
-                            <Download size={16} />
-                          )}
-                          <span className="text-sm">Pull from Cloud</span>
-                        </button>
-                      </div>
-
-                      {/* Sync Status */}
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-gray-500">Last synced:</span>
-                        <span className="text-gray-400 font-mono">
-                          {syncStatus.lastSynced
-                            ? new Date(syncStatus.lastSynced).toLocaleString()
-                            : 'Never'
-                          }
-                        </span>
-                      </div>
-
-                      {syncStatus.error && (
-                        <div className="flex items-center gap-2 p-2 rounded-lg bg-accent-red/20 text-accent-red text-xs">
-                          <AlertCircle size={14} />
-                          <span>{syncStatus.error}</span>
-                        </div>
-                      )}
-
-                      {/* Repair Eggs Data */}
-                      <div className="pt-3 border-t border-quant-border">
-                        <h4 className="text-xs text-gray-400 uppercase tracking-wider mb-2">Data Repair</h4>
-                        <p className="text-xs text-gray-500 mb-3">
-                          Regenera campos vacíos (prompt_content, full_ai_prompt, config) en eggs existentes
+                {settings.gracePeriodEnabled !== false ? (
+                  <>
+                    {/* Info Box */}
+                    <div className="p-3 bg-accent-yellow/10 border border-accent-yellow/20 rounded-xl mb-4">
+                      <div className="flex items-start gap-2">
+                        <Shield size={14} className="text-accent-yellow shrink-0 mt-0.5" />
+                        <p className="text-xs text-gray-300">
+                          Tras crear un egg, los trades mostraran precios y PnL en tiempo real
+                          pero <span className="text-white font-medium">NO se cerraran</span> por
+                          TP/SL durante este periodo. Esto previene cierres prematuros por
+                          volatilidad inicial.
                         </p>
+                      </div>
+                    </div>
+
+                    {/* Preset Buttons */}
+                    <div className="flex gap-2 mb-3">
+                      {[
+                        { min: 2, label: '2m' },
+                        { min: 5, label: '5m' },
+                        { min: 15, label: '15m' },
+                        { min: 30, label: '30m' },
+                        { min: 60, label: '1h' },
+                      ].map((preset) => (
                         <button
-                          onClick={async () => {
-                            setIsRepairing(true)
-                            setRepairResult(null)
-                            try {
-                              const result = await repairEggsInCloud()
-                              setRepairResult(result)
-                            } catch (err) {
-                              setRepairResult({ success: false, error: err.message })
-                            }
-                            setIsRepairing(false)
-                          }}
-                          disabled={isRepairing}
-                          className={`w-full py-2.5 rounded-xl font-medium flex items-center justify-center gap-2 transition-all ${
-                            isRepairing
-                              ? 'bg-quant-surface text-gray-400'
-                              : 'bg-accent-orange/20 text-accent-orange hover:bg-accent-orange/30'
+                          key={preset.min}
+                          onClick={() => updateSettings({ gracePeriodMinutes: preset.min })}
+                          className={`flex-1 py-2.5 rounded-lg text-xs font-mono transition-all ${
+                            (settings.gracePeriodMinutes || 5) === preset.min
+                              ? 'bg-accent-yellow/20 text-accent-yellow border border-accent-yellow/30'
+                              : 'bg-quant-surface text-gray-400 border border-transparent'
                           }`}
                         >
-                          {isRepairing ? (
-                            <>
-                              <RefreshCw size={14} className="animate-spin" />
-                              Reparando eggs...
-                            </>
-                          ) : (
-                            <>
-                              <Cpu size={14} />
-                              Reparar Datos de Eggs
-                            </>
-                          )}
+                          {preset.label}
                         </button>
-
-                        {repairResult && (
-                          <div className={`mt-2 p-2 rounded-lg text-xs flex items-start gap-2 ${
-                            repairResult.success
-                              ? 'bg-accent-green/10 border border-accent-green/30 text-accent-green'
-                              : 'bg-accent-red/10 border border-accent-red/30 text-accent-red'
-                          }`}>
-                            {repairResult.success ? (
-                              <>
-                                <Check size={14} className="shrink-0 mt-0.5" />
-                                <span>
-                                  {repairResult.repaired > 0
-                                    ? `Reparados ${repairResult.repaired}/${repairResult.total} eggs`
-                                    : `Todos los ${repairResult.total} eggs tienen datos válidos`
-                                  }
-                                </span>
-                              </>
-                            ) : (
-                              <>
-                                <AlertCircle size={14} className="shrink-0 mt-0.5" />
-                                <span>{repairResult.error}</span>
-                              </>
-                            )}
-                          </div>
-                        )}
-                      </div>
+                      ))}
                     </div>
-                  )}
-                </div>
+
+                    {/* Slider */}
+                    <input
+                      type="range"
+                      min={1}
+                      max={120}
+                      value={settings.gracePeriodMinutes || 5}
+                      onChange={(e) => updateSettings({ gracePeriodMinutes: Number(e.target.value) })}
+                      className="w-full h-1.5 accent-yellow-500"
+                    />
+                    <div className="flex justify-between mt-1 text-[9px] text-gray-600">
+                      <span>1 min</span>
+                      <span>120 min</span>
+                    </div>
+
+                    {/* Current Setting */}
+                    <div className="mt-3 p-2 bg-quant-surface rounded-lg text-center">
+                      <span className="text-xs text-gray-400">
+                        Trades protegidos durante{' '}
+                        <span className="text-accent-yellow font-mono font-bold">
+                          {settings.gracePeriodMinutes || 5} minutos
+                        </span>
+                        {' '}tras su creacion
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="p-3 bg-quant-surface rounded-xl">
+                    <p className="text-xs text-gray-500 text-center">
+                      Grace period desactivado. Los trades podran cerrarse por TP/SL inmediatamente.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Account */}
@@ -1022,6 +1014,11 @@ export default function Settings() {
                       <ScrollText size={14} className="text-accent-purple" />
                       <span className="text-gray-400">Logs:</span>
                       <span className="text-white font-mono">{dataCounts.activityLogs}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Stethoscope size={14} className="text-accent-orange" />
+                      <span className="text-gray-400">Health Checks:</span>
+                      <span className="text-white font-mono">{dataCounts.healthChecks}</span>
                     </div>
                   </div>
                 </div>
@@ -1162,6 +1159,42 @@ export default function Settings() {
                     </div>
                   </label>
 
+                  {/* Health Checks */}
+                  <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                    deleteOptions.deleteHealthChecks
+                      ? 'bg-accent-red/10 border-accent-red/50'
+                      : 'bg-quant-surface border-quant-border hover:border-gray-600'
+                  }`}>
+                    <input
+                      type="checkbox"
+                      checked={deleteOptions.deleteHealthChecks}
+                      onChange={(e) => setDeleteOptions({ ...deleteOptions, deleteHealthChecks: e.target.checked })}
+                      className="mt-0.5 w-4 h-4 rounded border-gray-600 bg-quant-surface text-accent-red focus:ring-accent-red"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-white font-medium flex items-center gap-2">
+                          <Stethoscope size={14} className="text-accent-orange" />
+                          Health Checks
+                        </span>
+                        <span className="text-xs text-gray-500 font-mono">
+                          {dataCounts.healthChecks} configs, {dataCounts.healthCheckEggs} eggs
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Batch testing configurations, run logs, and eggs created by health checks
+                      </p>
+                      {deleteOptions.deleteHealthChecks && dataCounts.healthCheckEggs > 0 && (
+                        <div className="flex items-start gap-1.5 mt-2 p-2 rounded bg-accent-orange/10 text-accent-orange text-xs">
+                          <AlertCircle size={12} className="flex-shrink-0 mt-0.5" />
+                          <span>
+                            {dataCounts.healthCheckEggs} eggs created by health checks will also be deleted (cascade)
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </label>
+
                   {/* Reset Onboarding */}
                   <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
                     deleteOptions.resetOnboarding
@@ -1189,7 +1222,7 @@ export default function Settings() {
                 </div>
 
                 {/* Linked Data Handling */}
-                {(deleteOptions.deletePrompts || deleteOptions.deleteEggs || deleteOptions.deleteSignals) && (
+                {(deleteOptions.deletePrompts || deleteOptions.deleteEggs || deleteOptions.deleteSignals || deleteOptions.deleteHealthChecks) && (
                   <div className="bg-quant-surface rounded-xl p-3 mb-4">
                     <span className="text-xs text-gray-500 uppercase tracking-wider block mb-2">
                       Linked Data Handling
@@ -1237,15 +1270,20 @@ export default function Settings() {
 
                 {/* Delete Result Message */}
                 {deleteResult && (
-                  <div className="bg-accent-green/10 border border-accent-green/30 rounded-xl p-3 mb-4">
-                    <div className="flex items-center gap-2 text-accent-green text-sm">
-                      <Check size={16} />
-                      <span>Data deleted successfully</span>
+                  <div className={`${deleteResult.error ? 'bg-accent-red/10 border-accent-red/30' : 'bg-accent-green/10 border-accent-green/30'} border rounded-xl p-3 mb-4`}>
+                    <div className={`flex items-center gap-2 ${deleteResult.error ? 'text-accent-red' : 'text-accent-green'} text-sm`}>
+                      {deleteResult.error ? <AlertCircle size={16} /> : <Check size={16} />}
+                      <span>{deleteResult.error ? 'Delete encountered an error' : 'Data deleted successfully'}</span>
                     </div>
-                    <p className="text-xs text-gray-400 mt-1">
-                      Removed: {deleteResult.deletedPrompts} prompts, {deleteResult.deletedEggs} eggs,
-                      {deleteResult.deletedSignals} signals, {deleteResult.deletedLogs} logs
-                    </p>
+                    {deleteResult.error ? (
+                      <p className="text-xs text-gray-400 mt-1">{deleteResult.error}</p>
+                    ) : (
+                      <p className="text-xs text-gray-400 mt-1">
+                        Removed: {deleteResult.deletedPrompts} prompts, {deleteResult.deletedEggs} eggs,
+                        {deleteResult.deletedSignals} signals, {deleteResult.deletedHealthChecks} health checks, {deleteResult.deletedLogs} logs
+                        {deleteResult.cloudDeleteSuccess && ' (cloud + local)'}
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -1253,15 +1291,24 @@ export default function Settings() {
                 <div className="space-y-2">
                   <button
                     onClick={() => anyDeleteSelected && setShowResetConfirm(true)}
-                    disabled={!anyDeleteSelected}
+                    disabled={!anyDeleteSelected || isResetting}
                     className={`w-full py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
-                      anyDeleteSelected
+                      anyDeleteSelected && !isResetting
                         ? 'bg-accent-red/20 text-accent-red hover:bg-accent-red/30'
                         : 'bg-quant-surface text-gray-600 cursor-not-allowed'
                     }`}
                   >
-                    <Trash2 size={16} />
-                    Delete Selected Data
+                    {isResetting ? (
+                      <>
+                        <RefreshCw size={16} className="animate-spin" />
+                        Deleting from cloud & local...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 size={16} />
+                        Delete Selected Data
+                      </>
+                    )}
                   </button>
 
                   <button
@@ -1270,13 +1317,15 @@ export default function Settings() {
                         deletePrompts: true,
                         deleteEggs: true,
                         deleteSignals: true,
+                        deleteHealthChecks: true,
                         deleteLogs: true,
                         resetOnboarding: true,
                         keepLinkedData: false
                       })
                       setShowResetConfirm(true)
                     }}
-                    className="w-full py-2 rounded-xl font-medium bg-transparent border border-accent-red/30 text-accent-red/70 hover:bg-accent-red/10 hover:text-accent-red transition-all text-sm"
+                    disabled={isResetting}
+                    className="w-full py-2 rounded-xl font-medium bg-transparent border border-accent-red/30 text-accent-red/70 hover:bg-accent-red/10 hover:text-accent-red transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Nuclear Option: Delete Everything & Restart
                   </button>
@@ -1369,8 +1418,8 @@ export default function Settings() {
                           Cancel
                         </button>
                         {deleteOptions.deletePrompts && deleteOptions.deleteEggs &&
-                         deleteOptions.deleteSignals && deleteOptions.deleteLogs &&
-                         deleteOptions.resetOnboarding && !deleteOptions.keepLinkedData ? (
+                         deleteOptions.deleteSignals && deleteOptions.deleteHealthChecks &&
+                         deleteOptions.deleteLogs && deleteOptions.resetOnboarding && !deleteOptions.keepLinkedData ? (
                           <button
                             onClick={async () => {
                               setIsResetting(true)
@@ -1391,9 +1440,17 @@ export default function Settings() {
                         ) : (
                           <button
                             onClick={handleSelectiveDelete}
-                            className="flex-1 py-3 rounded-xl bg-accent-red text-white font-medium hover:bg-accent-red/80 transition-colors"
+                            disabled={isResetting}
+                            className="flex-1 py-3 rounded-xl bg-accent-red text-white font-medium hover:bg-accent-red/80 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                           >
-                            Delete Selected
+                            {isResetting ? (
+                              <>
+                                <RefreshCw size={16} className="animate-spin" />
+                                Deleting...
+                              </>
+                            ) : (
+                              'Delete Selected'
+                            )}
                           </button>
                         )}
                       </div>

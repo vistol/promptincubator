@@ -1,11 +1,13 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Archive, Clock, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Activity, DollarSign, Zap, Cpu, Target, Hash, Radio, Filter, ArrowUpDown, Brain, MessageSquare, CheckCircle2, XCircle, Shield, Lightbulb, HelpCircle, ScrollText, Search, Play, Sparkles, AlertTriangle, CheckCheck, GitBranch } from 'lucide-react'
+import { Archive, Clock, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Activity, DollarSign, Zap, Cpu, Target, Hash, Radio, Filter, ArrowUpDown, Brain, MessageSquare, CheckCircle2, XCircle, Shield, Lightbulb, HelpCircle, ScrollText, Search, Play, Sparkles, AlertTriangle, CheckCheck, GitBranch, Info } from 'lucide-react'
 import useStore from '../store/useStore'
 import Header from '../components/Header'
 import EggIcon from '../components/EggIcon'
+import HealthCheckIcon from '../components/HealthCheckIcon'
 import MonitoringConsole from '../components/MonitoringConsole'
 import PipelineLog from '../components/PipelineLog'
+import { formatVariationSegments, formatVariationLabel, VARIATION_COLOR_STYLES } from '../lib/healthCheckUtils'
 
 // Execution time labels
 const EXECUTION_LABELS = {
@@ -88,6 +90,7 @@ export default function Incubator() {
   }
   const [sortBy, setSortBy] = useState('pnl') // 'pnl', 'recent', 'winRate', 'trades'
   const [filterBy, setFilterBy] = useState('all') // 'all', 'profitable', 'unprofitable', 'hatched', 'expired'
+  const [variationSubFilter, setVariationSubFilter] = useState(null) // null = all, or { label, variation }
 
   // Sort options - PnL first (default)
   const sortOptions = [
@@ -122,7 +125,8 @@ export default function Incubator() {
     if (!availableFilterIds.includes(filterBy)) {
       setFilterBy('all')
     }
-  }, [activeFilter])
+    setVariationSubFilter(null)
+  }, [activeFilter, filterBy])
 
   // Get all prompt IDs that belong to health checks
   const healthCheckPromptIds = useMemo(() => {
@@ -150,6 +154,43 @@ export default function Incubator() {
 
   // Check if egg is expired
   const isEggExpired = (egg) => egg.expiresAt && new Date(egg.expiresAt) <= new Date()
+
+  // Dynamic sub-filter options: derived from variation keys in current health check eggs
+  const variationSubFilterOptions = useMemo(() => {
+    if (filterBy !== 'healthChecks') return []
+
+    const hcEggs = eggs.filter(e => {
+      if (!e || !e.variation) return false
+      const expired = isEggExpired(e)
+      if (activeFilter === 'live') {
+        return e.status === 'incubating' && !expired && isHealthCheckEgg(e)
+      } else {
+        const isCompleted = e.status === 'hatched' || (e.status === 'incubating' && expired)
+        return isCompleted && isHealthCheckEgg(e)
+      }
+    })
+
+    if (hcEggs.length === 0) return []
+
+    const valueMap = new Map()
+    hcEggs.forEach(egg => {
+      const segments = formatVariationSegments(egg.variation)
+      const filterKey = segments.map(s => s.displayValue).join(' · ')
+
+      if (!valueMap.has(filterKey)) {
+        valueMap.set(filterKey, {
+          label: filterKey,
+          icon: segments[0]?.icon || '\u2699',
+          colorKey: segments[0]?.colorKey || 'gray',
+          count: 0,
+          variation: egg.variation
+        })
+      }
+      valueMap.get(filterKey).count++
+    })
+
+    return Array.from(valueMap.values())
+  }, [eggs, filterBy, activeFilter, healthCheckPromptIds])
 
   // Check if a signal is in grace period (warmup)
   const isInGracePeriod = (signal) =>
@@ -278,8 +319,13 @@ Configuración:
 
             // Then apply sub-filters (Option A)
             switch (filterBy) {
-              case 'healthChecks':
-                return healthCheckPromptIds.has(e.promptId)
+              case 'healthChecks': {
+                if (!isHealthCheckEgg(e)) return false
+                if (variationSubFilter && e.variation) {
+                  return JSON.stringify(e.variation) === JSON.stringify(variationSubFilter.variation)
+                }
+                return true
+              }
               case 'profitable':
                 return results.totalPnl >= 0
               case 'unprofitable':
@@ -294,8 +340,13 @@ Configuración:
 
             // Apply sub-filter for completed tab
             switch (filterBy) {
-              case 'healthChecks':
-                return healthCheckPromptIds.has(e.promptId)
+              case 'healthChecks': {
+                if (!isHealthCheckEgg(e)) return false
+                if (variationSubFilter && e.variation) {
+                  return JSON.stringify(e.variation) === JSON.stringify(variationSubFilter.variation)
+                }
+                return true
+              }
               case 'profitable':
                 return results.totalPnl >= 0
               case 'unprofitable':
@@ -335,7 +386,7 @@ Configuración:
   // Note: 'prices' intentionally excluded from dependencies to keep list order stable
   // PnL display updates in real-time via getEggPnl, but sort order only changes when
   // eggs/signals/filters change, not on every price tick
-  }, [eggs, signals, activeFilter, filterBy, sortBy, healthCheckPromptIds])
+  }, [eggs, signals, activeFilter, filterBy, sortBy, healthCheckPromptIds, variationSubFilter])
 
   // Get egg status info
   const getEggStatus = (egg) => {
@@ -586,6 +637,40 @@ Configuración:
           ))}
         </div>
 
+        {/* Variation Sub-filter (only when Health Checks filter is active) */}
+        {filterBy === 'healthChecks' && variationSubFilterOptions.length > 1 && (
+          <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar">
+            <Sparkles size={14} className="text-gray-500 shrink-0" />
+            <button
+              onClick={() => setVariationSubFilter(null)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0 ${
+                !variationSubFilter
+                  ? 'bg-accent-cyan/20 text-accent-cyan'
+                  : 'bg-quant-surface text-gray-400'
+              }`}
+            >
+              Todos
+            </button>
+            {variationSubFilterOptions.map((option, i) => {
+              const styles = VARIATION_COLOR_STYLES[option.colorKey] || VARIATION_COLOR_STYLES.gray
+              const isActive = variationSubFilter?.label === option.label
+              return (
+                <button
+                  key={i}
+                  onClick={() => setVariationSubFilter(isActive ? null : option)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0 flex items-center gap-1 ${
+                    isActive ? styles.chip : 'bg-quant-surface text-gray-400'
+                  }`}
+                >
+                  <span>{option.icon}</span>
+                  <span>{option.label}</span>
+                  <span className="text-[10px] opacity-60">({option.count})</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+
         {/* Sort */}
         <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar">
           <ArrowUpDown size={14} className="text-gray-500 shrink-0" />
@@ -632,6 +717,8 @@ Configuración:
                 ? (egg.results || calculateEggResults(egg))
                 : null
 
+              console.log('[EGG DEBUG]', egg.id, { isHealthCheck: egg.isHealthCheck, healthCheckId: egg.healthCheckId, variation: egg.variation })
+
               return (
                 <div
                   key={egg.id}
@@ -655,16 +742,23 @@ Configuración:
                     onClick={() => setExpandedEgg(isExpanded ? null : egg.id)}
                   >
                     <div className="flex items-center gap-3">
-                      {/* Egg Icon with status indicator */}
-                      <div className="relative flex-shrink-0">
-                        <EggIcon
-                          size={52}
-                          status={isExpiredEgg ? 'expired' : egg.status}
-                          winRate={results?.winRate || 0}
-                          isHealthCheck={!!egg.isHealthCheck || !!egg.healthCheckId}
-                        />
-                        {!isCompleted && status.active > 0 && (
-                          <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-accent-green rounded-full border-2 border-quant-card animate-pulse" />
+                      {/* Egg Icon with health check badge */}
+                      <div className="flex items-center flex-shrink-0">
+                        <div className="relative">
+                          <EggIcon
+                            size={52}
+                            status={isExpiredEgg ? 'expired' : egg.status}
+                            winRate={results?.winRate || 0}
+                          />
+                          {!isCompleted && status.active > 0 && (
+                            <div className="absolute bottom-0 right-0 w-3 h-3 bg-accent-green rounded-full border-2 border-quant-card animate-pulse" />
+                          )}
+                        </div>
+                        {/* Health check heartbeat badge */}
+                        {isHealthCheckEgg(egg) && (
+                          <div className="-ml-2">
+                            <HealthCheckIcon size={28} active={!isCompleted} />
+                          </div>
                         )}
                       </div>
 
@@ -674,13 +768,39 @@ Configuración:
                         <div className="flex items-center justify-between gap-2">
                           <h3 className="font-semibold text-white truncate text-base">{egg.promptName}</h3>
                           {pnl !== null && pnl !== undefined && !isNaN(pnl) && (
-                            <span className={`text-lg font-mono font-bold flex-shrink-0 ${
-                              pnl >= 0 ? 'text-accent-green' : 'text-accent-red'
-                            }`}>
-                              {pnl >= 0 ? '+' : ''}{(pnl || 0).toFixed(2)}%
-                            </span>
+                            <div className="flex items-center gap-1 flex-shrink-0 relative group/pnl">
+                              <span className={`text-lg font-mono font-bold ${
+                                pnl >= 0 ? 'text-accent-green' : 'text-accent-red'
+                              }`}>
+                                {pnl >= 0 ? '+' : ''}{(pnl || 0).toFixed(2)}%
+                              </span>
+                              <Info size={13} className="text-gray-500 group-hover/pnl:text-gray-300 transition-colors" />
+                              <div className="absolute right-0 top-full mt-1 z-50 hidden group-hover/pnl:block">
+                                <div className="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-[11px] text-gray-300 whitespace-nowrap shadow-lg">
+                                  PnL promedio (%) de todos los trades (abiertos + cerrados)
+                                </div>
+                              </div>
+                            </div>
                           )}
                         </div>
+
+                        {/* Variation badge (health check eggs only) */}
+                        {isHealthCheckEgg(egg) && egg.variation && (
+                          <div className="flex items-center gap-1 mt-1 flex-wrap">
+                            {formatVariationSegments(egg.variation).map((seg, i) => {
+                              const styles = VARIATION_COLOR_STYLES[seg.colorKey] || VARIATION_COLOR_STYLES.gray
+                              return (
+                                <span
+                                  key={i}
+                                  className={`text-[10px] px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5 ${styles.badge}`}
+                                >
+                                  <span>{seg.icon}</span>
+                                  <span>{seg.displayValue}</span>
+                                </span>
+                              )
+                            })}
+                          </div>
+                        )}
 
                         {/* Status row - single line */}
                         <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-400">

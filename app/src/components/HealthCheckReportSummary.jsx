@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { TrendingUp, TrendingDown, Target, Egg, Clock, CheckCircle, XCircle, AlertTriangle, Sparkles, BarChart3 } from 'lucide-react'
-import { getModelDisplayName } from '../lib/healthCheckUtils'
+import { getModelDisplayName, formatVariationLabel } from '../lib/healthCheckUtils'
 
 export default function HealthCheckReportSummary({ check, relatedEggs, signals, getEggStats }) {
   const latestRun = (check.runLog || [])[0] || null
@@ -41,10 +41,7 @@ export default function HealthCheckReportSummary({ check, relatedEggs, signals, 
     // Determine best variation label
     let bestVariationLabel = null
     if (bestEgg?.variation) {
-      bestVariationLabel = Object.entries(bestEgg.variation).map(([k, v]) => {
-        if (k === 'aiModel') return getModelDisplayName(v)
-        return `${k}:${v}`
-      }).join(' ')
+      bestVariationLabel = formatVariationLabel(bestEgg.variation)
     }
 
     return {
@@ -69,10 +66,7 @@ export default function HealthCheckReportSummary({ check, relatedEggs, signals, 
     if (!check.variations || check.variations.length === 0) return []
 
     return check.variations.map((variation) => {
-      const variationLabel = Object.entries(variation).map(([k, v]) => {
-        if (k === 'aiModel') return getModelDisplayName(v)
-        return `${k}:${v}`
-      }).join(' ')
+      const variationLabel = formatVariationLabel(variation)
 
       // Find egg for this variation
       const matchedEgg = relatedEggs.find(egg => {

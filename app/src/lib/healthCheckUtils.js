@@ -165,6 +165,96 @@ export function getSuggestionAction(errorType) {
   }
 }
 
+// ─── Variation Formatting ───────────────────────────────────────────
+
+// Configuration for each variation key: how to display it
+const VARIATION_KEY_CONFIG = {
+  aiModel: {
+    icon: '\u{1F9E0}', // 🧠
+    colorKey: 'purple',
+    formatValue: (v) => MODEL_DISPLAY_NAMES[v] || v
+  },
+  leverage: {
+    icon: '\u26A1', // ⚡
+    colorKey: 'yellow',
+    formatValue: (v) => `${v}x`
+  },
+  executionTime: {
+    icon: '\u23F1', // ⏱
+    colorKey: 'cyan',
+    formatValue: (v) => {
+      const labels = { target: 'Target', scalping: 'Scalping', intraday: 'Intraday', swing: 'Swing' }
+      return labels[v] || v
+    }
+  },
+  targetPct: {
+    icon: '\u{1F3AF}', // 🎯
+    colorKey: 'green',
+    formatValue: (v) => `TP ${v}%`
+  },
+  stopLoss: {
+    icon: '\u{1F6E1}', // 🛡
+    colorKey: 'red',
+    formatValue: (v) => `SL ${v}%`
+  },
+  minIpe: {
+    icon: '\u{1F4CA}', // 📊
+    colorKey: 'cyan',
+    formatValue: (v) => `IPE ${v}%`
+  },
+  numResults: {
+    icon: '\u{1F4C8}', // 📈
+    colorKey: 'orange',
+    formatValue: (v) => `${v} trades`
+  }
+}
+
+// Pre-defined CSS class mappings to avoid dynamic Tailwind class construction
+export const VARIATION_COLOR_STYLES = {
+  purple: { badge: 'bg-accent-purple/15 text-accent-purple', chip: 'bg-accent-purple/20 text-accent-purple' },
+  yellow: { badge: 'bg-accent-yellow/15 text-accent-yellow', chip: 'bg-accent-yellow/20 text-accent-yellow' },
+  cyan: { badge: 'bg-accent-cyan/15 text-accent-cyan', chip: 'bg-accent-cyan/20 text-accent-cyan' },
+  green: { badge: 'bg-accent-green/15 text-accent-green', chip: 'bg-accent-green/20 text-accent-green' },
+  red: { badge: 'bg-accent-red/15 text-accent-red', chip: 'bg-accent-red/20 text-accent-red' },
+  orange: { badge: 'bg-accent-orange/15 text-accent-orange', chip: 'bg-accent-orange/20 text-accent-orange' },
+  gray: { badge: 'bg-gray-500/15 text-gray-400', chip: 'bg-gray-500/20 text-gray-400' }
+}
+
+/**
+ * Format a variation object into an array of displayable segments.
+ * @param {Object} variation - e.g. { aiModel: 'google' } or { leverage: 5, aiModel: 'anthropic' }
+ * @returns {Array<{ key, displayValue, icon, colorKey }>}
+ */
+export function formatVariationSegments(variation) {
+  if (!variation || typeof variation !== 'object') return []
+
+  return Object.entries(variation).map(([key, value]) => {
+    const config = VARIATION_KEY_CONFIG[key] || {
+      icon: '\u2699', // ⚙
+      colorKey: 'gray',
+      formatValue: (v) => String(v)
+    }
+
+    return {
+      key,
+      displayValue: config.formatValue(value),
+      icon: config.icon,
+      colorKey: config.colorKey
+    }
+  })
+}
+
+/**
+ * Format variation as a single human-readable string.
+ * @param {Object} variation
+ * @returns {string} - e.g. "🧠 Google Gemini" or "⚡ 5x · 🧠 Claude"
+ */
+export function formatVariationLabel(variation) {
+  const segments = formatVariationSegments(variation)
+  if (segments.length === 0) return ''
+  return segments.map(s => `${s.icon} ${s.displayValue}`).join(' · ')
+}
+
 // Status icon/color helpers for UI
 export function getEventStatusConfig(status) {
   switch (status) {
