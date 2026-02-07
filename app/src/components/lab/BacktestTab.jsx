@@ -1,6 +1,6 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Play, Trash2, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Clock, X, ArrowLeft, Loader2, Calendar, BarChart3 } from 'lucide-react'
+import { Plus, Play, Trash2, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Clock, X, ArrowLeft, Loader2, Calendar, BarChart3, Award, Info, ChevronRight } from 'lucide-react'
 import useStore from '../../store/useStore'
 import { fetchHistoricalData, fetchMultiSymbolData, getPricesAtTime } from '../../lib/historicalDataService'
 import { generateTradesFromPrompt } from '../../lib/aiService'
@@ -26,6 +26,106 @@ const RANGE_PRESETS = [
   { label: '3 Months', days: 90 },
 ]
 
+// ─── Scoring System ───────────────────────────────────────────────
+
+/**
+ * Calculate a grade (A-F) for a backtest based on key metrics
+ * Returns { grade, color, bgColor, score, verdict }
+ */
+const calculateBacktestGrade = (result) => {
+  if (!result) return { grade: '?', color: 'text-gray-400', bgColor: 'bg-gray-500/10 border-gray-500/30', score: 0, verdict: 'Sin datos' }
+
+  const pnl = result.totalPnlPercent || 0
+  const winRate = result.winRate || 0
+  const profitFactor = result.profitFactor === Infinity ? 10 : (result.profitFactor || 0)
+  const maxDD = result.maxDrawdown || 0
+  const sharpe = result.sharpeRatio || 0
+  const totalTrades = result.totalTrades || 0
+
+  // Score each metric (0-100)
+  // PnL: -20% = 0pts, 0% = 30pts, +20% = 70pts, +50% = 100pts
+  const pnlScore = Math.max(0, Math.min(100, ((pnl + 20) / 70) * 100))
+
+  // Win Rate: 30% = 0pts, 50% = 40pts, 60% = 70pts, 75%+ = 100pts
+  const wrScore = Math.max(0, Math.min(100, ((winRate - 30) / 45) * 100))
+
+  // Profit Factor: 0 = 0pts, 1 = 30pts, 1.5 = 60pts, 2.5+ = 100pts
+  const pfScore = Math.max(0, Math.min(100, (profitFactor / 2.5) * 100))
+
+  // Max Drawdown (inverted — lower is better): 50% = 0pts, 20% = 50pts, 5% = 100pts
+  const ddScore = Math.max(0, Math.min(100, ((50 - maxDD) / 45) * 100))
+
+  // Sharpe Ratio: -1 = 0pts, 0 = 30pts, 1 = 60pts, 2+ = 100pts
+  const sharpeScore = Math.max(0, Math.min(100, ((sharpe + 1) / 3) * 100))
+
+  // Trade count penalty — fewer than 5 trades = unreliable
+  const tradePenalty = totalTrades < 3 ? 0.5 : totalTrades < 5 ? 0.75 : totalTrades < 10 ? 0.9 : 1.0
+
+  // Weighted composite score
+  const rawScore = (
+    pnlScore * 0.30 +
+    wrScore * 0.20 +
+    pfScore * 0.20 +
+    ddScore * 0.15 +
+    sharpeScore * 0.15
+  ) * tradePenalty
+
+  const score = Math.round(rawScore)
+
+  // Grade thresholds
+  let grade, color, bgColor
+  if (score >= 80) { grade = 'A'; color = 'text-emerald-400'; bgColor = 'bg-emerald-500/10 border-emerald-500/40' }
+  else if (score >= 65) { grade = 'B'; color = 'text-accent-cyan'; bgColor = 'bg-accent-cyan/10 border-accent-cyan/40' }
+  else if (score >= 50) { grade = 'C'; color = 'text-yellow-400'; bgColor = 'bg-yellow-500/10 border-yellow-500/40' }
+  else if (score >= 35) { grade = 'D'; color = 'text-orange-400'; bgColor = 'bg-orange-500/10 border-orange-500/40' }
+  else { grade = 'F'; color = 'text-accent-red'; bgColor = 'bg-accent-red/10 border-accent-red/40' }
+
+  // Generate human-readable verdict
+  const verdict = generateVerdict(pnl, winRate, profitFactor, maxDD, sharpe, totalTrades, grade)
+
+  return { grade, color, bgColor, score, verdict }
+}
+
+/**
+ * Generate a contextual verdict in Spanish
+ */
+const generateVerdict = (pnl, winRate, profitFactor, maxDD, sharpe, totalTrades, grade) => {
+  const parts = []
+
+  // Main assessment
+  if (grade === 'A') {
+    parts.push('Estrategia excelente.')
+  } else if (grade === 'B') {
+    parts.push('Estrategia buena con potencial.')
+  } else if (grade === 'C') {
+    parts.push('Resultados medianos.')
+  } else if (grade === 'D') {
+    parts.push('Estrategia debil.')
+  } else {
+    parts.push('Estrategia no viable.')
+  }
+
+  // PnL insight
+  if (pnl > 20) parts.push(`+${pnl.toFixed(1)}% de retorno es fuerte.`)
+  else if (pnl > 5) parts.push(`+${pnl.toFixed(1)}% positivo pero moderado.`)
+  else if (pnl > 0) parts.push(`+${pnl.toFixed(1)}% apenas cubre costos.`)
+  else if (pnl > -5) parts.push(`${pnl.toFixed(1)}% perdida menor.`)
+  else parts.push(`${pnl.toFixed(1)}% perdida significativa.`)
+
+  // Key weakness
+  if (maxDD > 30) parts.push(`Drawdown de ${maxDD.toFixed(0)}% es muy riesgoso.`)
+  else if (winRate < 40 && totalTrades >= 5) parts.push(`Win rate bajo (${winRate.toFixed(0)}%), muchos trades perdedores.`)
+  else if (profitFactor < 1 && profitFactor > 0) parts.push(`PF < 1 significa que pierde mas de lo que gana.`)
+  else if (profitFactor >= 2) parts.push(`PF de ${profitFactor.toFixed(1)} indica buena relacion riesgo/beneficio.`)
+
+  // Trade count warning
+  if (totalTrades < 5) parts.push(`Solo ${totalTrades} trades — resultados poco confiables.`)
+
+  return parts.join(' ')
+}
+
+// ─── Component ────────────────────────────────────────────────────
+
 export default function BacktestTab() {
   const backtests = useStore((s) => s.backtests) || []
   const addBacktest = useStore((s) => s.addBacktest)
@@ -36,6 +136,7 @@ export default function BacktestTab() {
   const [showWizard, setShowWizard] = useState(false)
   const [wizardStep, setWizardStep] = useState(1)
   const [expandedId, setExpandedId] = useState(null)
+  const [collapsedGroups, setCollapsedGroups] = useState({})
 
   // Wizard state
   const [selectedPromptId, setSelectedPromptId] = useState(null)
@@ -53,6 +154,41 @@ export default function BacktestTab() {
 
   const activePrompts = prompts.filter(p => p.status === 'active')
   const selectedPrompt = prompts.find(p => p.id === selectedPromptId)
+
+  // ─── Group backtests by prompt name ───
+  const groupedBacktests = useMemo(() => {
+    const groups = {}
+    for (const bt of backtests) {
+      const key = bt.promptName || 'Unknown'
+      if (!groups[key]) groups[key] = []
+      groups[key].push(bt)
+    }
+    // Sort groups by most recent backtest, and within each group sort by date desc
+    const entries = Object.entries(groups).map(([name, items]) => {
+      const sorted = [...items].sort((a, b) => (b.endTime || 0) - (a.endTime || 0))
+      return { name, items: sorted, latestTime: sorted[0]?.endTime || 0 }
+    })
+    entries.sort((a, b) => b.latestTime - a.latestTime)
+    return entries
+  }, [backtests])
+
+  // Best grade per group (for group header)
+  const groupBestGrade = useMemo(() => {
+    const map = {}
+    for (const group of groupedBacktests) {
+      let best = { score: -1 }
+      for (const bt of group.items) {
+        const g = calculateBacktestGrade(bt.result)
+        if (g.score > best.score) best = g
+      }
+      map[group.name] = best
+    }
+    return map
+  }, [groupedBacktests])
+
+  const toggleGroup = (name) => {
+    setCollapsedGroups(prev => ({ ...prev, [name]: !prev[name] }))
+  }
 
   // Listen for FAB trigger
   useEffect(() => {
@@ -91,7 +227,6 @@ export default function BacktestTab() {
     const startTime = endTime - rangeDays * 24 * 60 * 60 * 1000
 
     // Check API key upfront — map model names to API key names
-    // Prompts may store aiModel as 'gemini' but apiKeys uses 'google', etc.
     const MODEL_TO_KEY = { gemini: 'google', 'gemini-2.5-flash': 'google', 'gemini-2.0-flash': 'google', 'gemini-2.5-flash-lite': 'google', 'gemini-2.5-pro': 'google', claude: 'anthropic', 'claude-sonnet-4-20250514': 'anthropic', 'claude-3-5-sonnet-20241022': 'anthropic', gpt4: 'openai', 'gpt-4': 'openai', 'gpt-4-turbo': 'openai', grok: 'xai', 'grok-3-mini': 'xai', 'grok-3': 'xai', groq: 'groq', 'llama-3.3-70b-versatile': 'groq', 'llama-3.1-8b-instant': 'groq', sambanova: 'sambanova', 'Meta-Llama-3.1-405B-Instruct': 'sambanova', 'Meta-Llama-3.1-70B-Instruct': 'sambanova' }
     const rawProvider = selectedPrompt.aiModel || settings.aiProvider || 'google'
     const aiProvider = MODEL_TO_KEY[rawProvider] || rawProvider
@@ -129,13 +264,30 @@ export default function BacktestTab() {
 
       setRunProgress({ phase: 'data', message: `Loaded ${totalCandles} candles across ${Object.keys(historicalData).length} assets`, pct: 30 })
 
+      // Step 1.5: Get BTC performance for market context
+      let btcContext = null
+      try {
+        const btcCandles = historicalData['BTC/USDT']
+        if (btcCandles && btcCandles.length >= 2) {
+          const firstPrice = btcCandles[0].close
+          const lastPrice = btcCandles[btcCandles.length - 1].close
+          btcContext = {
+            startPrice: firstPrice,
+            endPrice: lastPrice,
+            changePercent: ((lastPrice - firstPrice) / firstPrice) * 100
+          }
+        }
+      } catch (e) {
+        // BTC context is optional — continue without it
+      }
+
       // Step 2: Walk-Forward Sampling — call AI at N evenly spaced historical points
       const allTrades = []
       const step = (endTime - startTime) / samplePoints
       let successfulSamples = 0
 
       for (let i = 0; i < samplePoints; i++) {
-        const sampleTime = startTime + (i * step) + (step * 0.5) // Center of each window
+        const sampleTime = startTime + (i * step) + (step * 0.5)
         const sampleDate = new Date(sampleTime).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
 
         setRunProgress({
@@ -145,7 +297,6 @@ export default function BacktestTab() {
         })
 
         try {
-          // Extract historical prices at this sample point from candle data
           const historicalPrices = getPricesAtTime(historicalData, sampleTime)
 
           if (!historicalPrices || Object.keys(historicalPrices).length === 0) {
@@ -154,7 +305,6 @@ export default function BacktestTab() {
             continue
           }
 
-          // Call AI with historical prices (override, not live)
           const trades = await generateTradesFromPrompt(
             selectedPrompt,
             settings,
@@ -164,7 +314,7 @@ export default function BacktestTab() {
                 setRunProgress({ phase: 'ai', message: `Sample ${i + 1}: ${event.message || 'AI error'}`, pct: 30 + ((i / samplePoints) * 40) })
               }
             },
-            historicalPrices // Walk-forward: use historical prices
+            historicalPrices
           )
 
           if (!trades || trades.length === 0) {
@@ -172,13 +322,12 @@ export default function BacktestTab() {
             continue
           }
 
-          // Place trades at the sample time (real historical position)
           const mappedTrades = trades.map((t) => ({
             ...t,
             entry: parseFloat(t.entry),
             takeProfit: parseFloat(t.takeProfit),
             stopLoss: parseFloat(t.stopLoss),
-            time: sampleTime, // Real historical timestamp
+            time: sampleTime,
           }))
 
           allTrades.push(...mappedTrades)
@@ -191,7 +340,6 @@ export default function BacktestTab() {
             message: `Sample ${i + 1} failed: ${err.message.slice(0, 80)}...`,
             pct: 30 + ((i / samplePoints) * 40)
           })
-          // Wait before next sample (rate limiting)
           await new Promise(r => setTimeout(r, 2000))
         }
       }
@@ -222,7 +370,7 @@ export default function BacktestTab() {
 
       setRunProgress({ phase: 'done', message: successMsg, pct: 100 })
 
-      // Save backtest
+      // Save backtest with BTC context
       addBacktest({
         promptId: selectedPrompt.id,
         promptName: selectedPrompt.name,
@@ -235,6 +383,7 @@ export default function BacktestTab() {
         takerFee,
         samplePoints,
         runsCompleted: successfulSamples,
+        btcContext,
         config: {
           capital: selectedPrompt.capital,
           leverage: selectedPrompt.leverage,
@@ -244,7 +393,6 @@ export default function BacktestTab() {
         status: 'completed'
       })
 
-      // Brief delay to show completion
       await new Promise(r => setTimeout(r, 1200))
       setShowWizard(false)
       resetWizard()
@@ -256,6 +404,8 @@ export default function BacktestTab() {
       setIsRunning(false)
     }
   }, [selectedPrompt, selectedAssets, selectedInterval, rangeDays, slippage, takerFee, samplePoints, settings, addBacktest])
+
+  // ─── Render ─────────────────────────────────────────────────────
 
   return (
     <div className="space-y-3">
@@ -285,119 +435,61 @@ export default function BacktestTab() {
             </button>
           )}
 
-          {backtests.map((bt) => {
-            const isExpanded = expandedId === bt.id
-            const r = bt.result || {}
-            const isProfitable = (r.totalPnlPercent || 0) >= 0
+          {/* Grouped backtests */}
+          {groupedBacktests.map((group) => {
+            const isCollapsed = collapsedGroups[group.name]
+            const bestGrade = groupBestGrade[group.name] || { grade: '?', color: 'text-gray-400', bgColor: 'bg-gray-500/10 border-gray-500/30' }
 
             return (
-              <motion.div
-                key={bt.id}
-                layout
-                className="bg-quant-card border border-quant-border rounded-xl overflow-hidden"
-              >
+              <div key={group.name} className="space-y-2">
+                {/* Group Header */}
                 <button
-                  onClick={() => setExpandedId(isExpanded ? null : bt.id)}
-                  className="w-full p-3 text-left"
+                  onClick={() => toggleGroup(group.name)}
+                  className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl bg-quant-surface/50 border border-quant-border hover:border-gray-600 transition-all"
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Clock size={14} className="text-accent-cyan shrink-0" />
-                      <span className="text-sm font-medium text-white truncate">{bt.promptName}</span>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className={`text-sm font-mono font-bold ${isProfitable ? 'text-accent-green' : 'text-accent-red'}`}>
-                        {isProfitable ? '+' : ''}{(r.totalPnlPercent || 0).toFixed(1)}%
-                      </span>
-                      {isExpanded ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
-                    </div>
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <motion.div
+                      animate={{ rotate: isCollapsed ? 0 : 90 }}
+                      transition={{ duration: 0.15 }}
+                    >
+                      <ChevronRight size={14} className="text-gray-500" />
+                    </motion.div>
+                    <span className="text-sm font-semibold text-white truncate">{group.name}</span>
+                    <span className="text-[10px] text-gray-500 shrink-0">
+                      {group.items.length} run{group.items.length > 1 ? 's' : ''}
+                    </span>
                   </div>
-
-                  <p className="text-[10px] text-gray-500 mb-2">
-                    {bt.assets?.join(', ')} · {bt.rangeDays}d · {bt.interval} · {Math.round(r.totalTrades || 0)} trades
-                  </p>
-
-                  {/* Mini stats row */}
-                  <div className="grid grid-cols-4 gap-2">
-                    {[
-                      { label: 'PnL', value: `${isProfitable ? '+' : ''}${(r.totalPnlPercent || 0).toFixed(1)}%`, color: isProfitable ? 'text-accent-green' : 'text-accent-red' },
-                      { label: 'Win Rate', value: `${(r.winRate || 0).toFixed(0)}%`, color: 'text-white' },
-                      { label: 'PF', value: (r.profitFactor || 0) === Infinity ? '∞' : (r.profitFactor || 0).toFixed(2), color: 'text-white' },
-                      { label: 'Max DD', value: `-${(r.maxDrawdown || 0).toFixed(1)}%`, color: 'text-accent-red' },
-                    ].map((stat) => (
-                      <div key={stat.label} className="bg-quant-surface rounded-lg p-1.5 text-center">
-                        <div className={`text-[10px] font-mono font-bold ${stat.color}`}>{stat.value}</div>
-                        <div className="text-[8px] text-gray-500">{stat.label}</div>
-                      </div>
-                    ))}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {/* Best grade badge */}
+                    <div className={`px-2 py-0.5 rounded-md border text-[10px] font-bold ${bestGrade.bgColor} ${bestGrade.color}`}>
+                      Mejor: {bestGrade.grade}
+                    </div>
                   </div>
                 </button>
 
-                {/* Expanded content */}
+                {/* Group Items */}
                 <AnimatePresence>
-                  {isExpanded && (
+                  {!isCollapsed && (
                     <motion.div
                       initial={{ height: 0, opacity: 0 }}
                       animate={{ height: 'auto', opacity: 1 }}
                       exit={{ height: 0, opacity: 0 }}
-                      className="border-t border-quant-border"
+                      transition={{ duration: 0.2 }}
+                      className="space-y-2 overflow-hidden pl-2"
                     >
-                      <div className="p-3 space-y-3">
-                        {/* Equity curve */}
-                        {r.equityCurve && r.equityCurve.length > 1 && (
-                          <div>
-                            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Equity Curve</p>
-                            <EquityCurve data={r.equityCurve} height={100} />
-                          </div>
-                        )}
-
-                        {/* Extended stats */}
-                        <div className="grid grid-cols-3 gap-2">
-                          {[
-                            { label: 'Sharpe', value: (r.sharpeRatio || 0).toFixed(2) },
-                            { label: 'Wins', value: Math.round(r.wins || 0) },
-                            { label: 'Losses', value: Math.round(r.losses || 0) },
-                            { label: 'Capital', value: `$${(r.initialCapital || 0).toLocaleString()}` },
-                            { label: 'Final', value: `$${(r.finalCapital || 0).toFixed(0)}` },
-                            { label: 'Samples', value: bt.samplePoints || 1 },
-                          ].map((stat) => (
-                            <div key={stat.label} className="bg-quant-surface rounded-lg p-2 text-center">
-                              <div className="text-xs font-mono font-bold text-white">{stat.value}</div>
-                              <div className="text-[9px] text-gray-500">{stat.label}</div>
-                            </div>
-                          ))}
-                        </div>
-
-                        {/* Trade list */}
-                        {r.trades && r.trades.length > 0 && (
-                          <div>
-                            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Trades ({r.trades.length})</p>
-                            <div className="space-y-1 max-h-40 overflow-y-auto hide-scrollbar">
-                              {r.trades.slice(0, 20).map((t, i) => (
-                                <div key={i} className="flex items-center justify-between py-1 px-2 bg-quant-surface rounded-lg text-[10px]">
-                                  <span className="text-gray-400">{t.asset} {t.strategy}</span>
-                                  <span className={`font-mono font-bold ${t.result === 'win' ? 'text-accent-green' : t.result === 'loss' ? 'text-accent-red' : 'text-gray-400'}`}>
-                                    {(t.pnlPercent || 0) >= 0 ? '+' : ''}{(t.pnlPercent || 0).toFixed(2)}%
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Delete */}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); deleteBacktest(bt.id) }}
-                          className="w-full p-2 rounded-lg text-[10px] text-accent-red/60 hover:text-accent-red hover:bg-accent-red/10 transition-all"
-                        >
-                          <Trash2 size={12} className="inline mr-1" />
-                          Delete backtest
-                        </button>
-                      </div>
+                      {group.items.map((bt) => (
+                        <BacktestCard
+                          key={bt.id}
+                          bt={bt}
+                          isExpanded={expandedId === bt.id}
+                          onToggle={() => setExpandedId(expandedId === bt.id ? null : bt.id)}
+                          onDelete={() => deleteBacktest(bt.id)}
+                        />
+                      ))}
                     </motion.div>
                   )}
                 </AnimatePresence>
-              </motion.div>
+              </div>
             )
           })}
         </>
@@ -640,5 +732,169 @@ export default function BacktestTab() {
         )}
       </AnimatePresence>
     </div>
+  )
+}
+
+// ─── Backtest Card Component ──────────────────────────────────────
+
+function BacktestCard({ bt, isExpanded, onToggle, onDelete }) {
+  const r = bt.result || {}
+  const isProfitable = (r.totalPnlPercent || 0) >= 0
+  const gradeInfo = useMemo(() => calculateBacktestGrade(r), [r])
+  const btcCtx = bt.btcContext
+
+  // Format date
+  const dateStr = bt.endTime
+    ? new Date(bt.endTime).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })
+    : ''
+
+  return (
+    <motion.div
+      layout
+      className="bg-quant-card border border-quant-border rounded-xl overflow-hidden"
+    >
+      <button
+        onClick={onToggle}
+        className="w-full p-3 text-left"
+      >
+        {/* Top row: grade + config + PnL */}
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2 min-w-0">
+            {/* Grade badge */}
+            <div className={`w-8 h-8 rounded-lg border flex items-center justify-center text-sm font-black shrink-0 ${gradeInfo.bgColor} ${gradeInfo.color}`}>
+              {gradeInfo.grade}
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-gray-500">{bt.rangeDays}d · {bt.interval} · {bt.config?.aiModel || '?'}</span>
+              </div>
+              <span className="text-[10px] text-gray-600">{dateStr}</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className={`text-base font-mono font-black ${isProfitable ? 'text-accent-green' : 'text-accent-red'}`}>
+              {isProfitable ? '+' : ''}{(r.totalPnlPercent || 0).toFixed(1)}%
+            </span>
+            {isExpanded ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
+          </div>
+        </div>
+
+        {/* Mini stats row */}
+        <div className="grid grid-cols-4 gap-1.5 mb-2">
+          {[
+            { label: 'Win Rate', value: `${(r.winRate || 0).toFixed(0)}%`, color: (r.winRate || 0) >= 50 ? 'text-accent-green' : 'text-accent-red' },
+            { label: 'PF', value: (r.profitFactor || 0) === Infinity ? '∞' : (r.profitFactor || 0).toFixed(2), color: (r.profitFactor || 0) >= 1.5 ? 'text-accent-green' : (r.profitFactor || 0) >= 1 ? 'text-yellow-400' : 'text-accent-red' },
+            { label: 'Max DD', value: `-${(r.maxDrawdown || 0).toFixed(1)}%`, color: 'text-accent-red' },
+            { label: 'Trades', value: Math.round(r.totalTrades || 0), color: 'text-white' },
+          ].map((stat) => (
+            <div key={stat.label} className="bg-quant-surface rounded-lg p-1.5 text-center">
+              <div className={`text-[10px] font-mono font-bold ${stat.color}`}>{stat.value}</div>
+              <div className="text-[8px] text-gray-500">{stat.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Verdict text */}
+        <p className="text-[10px] text-gray-400 leading-relaxed">{gradeInfo.verdict}</p>
+
+        {/* BTC Market Context */}
+        {btcCtx && (
+          <div className="mt-1.5 flex items-center gap-1.5 text-[10px]">
+            <span className="text-gray-600">BTC en el mismo periodo:</span>
+            <span className={`font-mono font-bold ${btcCtx.changePercent >= 0 ? 'text-accent-green' : 'text-accent-red'}`}>
+              {btcCtx.changePercent >= 0 ? '+' : ''}{btcCtx.changePercent.toFixed(1)}%
+            </span>
+            <span className="text-gray-600">
+              (${btcCtx.startPrice?.toLocaleString()} → ${btcCtx.endPrice?.toLocaleString()})
+            </span>
+          </div>
+        )}
+      </button>
+
+      {/* Expanded content */}
+      <AnimatePresence>
+        {isExpanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="border-t border-quant-border"
+          >
+            <div className="p-3 space-y-3">
+              {/* Score detail */}
+              <div className="bg-quant-surface rounded-lg p-2.5">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] text-gray-500 uppercase tracking-wider">Score Breakdown</span>
+                  <span className={`text-xs font-black ${gradeInfo.color}`}>{gradeInfo.score}/100</span>
+                </div>
+                <div className="w-full h-2 bg-quant-bg rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      gradeInfo.score >= 80 ? 'bg-emerald-500' :
+                      gradeInfo.score >= 65 ? 'bg-accent-cyan' :
+                      gradeInfo.score >= 50 ? 'bg-yellow-500' :
+                      gradeInfo.score >= 35 ? 'bg-orange-500' :
+                      'bg-accent-red'
+                    }`}
+                    style={{ width: `${gradeInfo.score}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Equity curve */}
+              {r.equityCurve && r.equityCurve.length > 1 && (
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Equity Curve</p>
+                  <EquityCurve data={r.equityCurve} height={100} />
+                </div>
+              )}
+
+              {/* Extended stats */}
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { label: 'Sharpe', value: (r.sharpeRatio || 0).toFixed(2) },
+                  { label: 'Wins', value: Math.round(r.wins || 0) },
+                  { label: 'Losses', value: Math.round(r.losses || 0) },
+                  { label: 'Capital', value: `$${(r.initialCapital || 0).toLocaleString()}` },
+                  { label: 'Final', value: `$${(r.finalCapital || 0).toFixed(0)}` },
+                  { label: 'Samples', value: bt.samplePoints || 1 },
+                ].map((stat) => (
+                  <div key={stat.label} className="bg-quant-surface rounded-lg p-2 text-center">
+                    <div className="text-xs font-mono font-bold text-white">{stat.value}</div>
+                    <div className="text-[9px] text-gray-500">{stat.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Trade list */}
+              {r.trades && r.trades.length > 0 && (
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Trades ({r.trades.length})</p>
+                  <div className="space-y-1 max-h-40 overflow-y-auto hide-scrollbar">
+                    {r.trades.slice(0, 20).map((t, i) => (
+                      <div key={i} className="flex items-center justify-between py-1 px-2 bg-quant-surface rounded-lg text-[10px]">
+                        <span className="text-gray-400">{t.asset} {t.strategy}</span>
+                        <span className={`font-mono font-bold ${t.result === 'win' ? 'text-accent-green' : t.result === 'loss' ? 'text-accent-red' : 'text-gray-400'}`}>
+                          {(t.pnlPercent || 0) >= 0 ? '+' : ''}{(t.pnlPercent || 0).toFixed(2)}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Delete */}
+              <button
+                onClick={(e) => { e.stopPropagation(); onDelete() }}
+                className="w-full p-2 rounded-lg text-[10px] text-accent-red/60 hover:text-accent-red hover:bg-accent-red/10 transition-all"
+              >
+                <Trash2 size={12} className="inline mr-1" />
+                Delete backtest
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   )
 }
