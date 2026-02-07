@@ -49,9 +49,24 @@ const getDecimalPlaces = (asset, price) => {
   return 6
 }
 
-// Fetch real prices from Binance
+// In-memory price cache (shared across calls within the same session)
+let _priceCache = { data: null, timestamp: 0 }
+const PRICE_CACHE_TTL = 30 * 1000 // 30 seconds — avoids redundant API calls
+
+// Fetch real prices from Binance (with 30s cache)
 const fetchRealPrices = async (assets) => {
   try {
+    // Return cached prices if < 30 seconds old
+    const now = Date.now()
+    if (_priceCache.data && (now - _priceCache.timestamp) < PRICE_CACHE_TTL) {
+      // Check if cache has all requested assets
+      const hasAll = assets.every(a => a in _priceCache.data)
+      if (hasAll) {
+        console.log('[aiService] Using cached prices (' + Math.round((now - _priceCache.timestamp) / 1000) + 's old)')
+        return _priceCache.data
+      }
+    }
+
     const prices = await fetchBinancePrices(assets)
     const priceMap = {}
 
@@ -61,9 +76,17 @@ const fetchRealPrices = async (assets) => {
       }
     }
 
+    // Update cache
+    _priceCache = { data: priceMap, timestamp: Date.now() }
+
     return priceMap
   } catch (error) {
     console.error('Failed to fetch real prices:', error)
+    // On error, return stale cache if available (better than nothing)
+    if (_priceCache.data) {
+      console.warn('[aiService] Returning stale cached prices due to fetch error')
+      return _priceCache.data
+    }
     return null
   }
 }

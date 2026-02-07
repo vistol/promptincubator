@@ -1092,10 +1092,19 @@ If no truly new strategy can be generated, you must invent a new angle rather th
       },
       priceRefreshInterval: null,
 
-      // Fetch prices for all active trades
-      fetchAllPrices: async () => {
+      // Fetch prices for all active trades (with 30s cache)
+      fetchAllPrices: async (forceRefresh = false) => {
         const state = get()
         const { primary, secondary } = state.settings.tradingPlatform
+
+        // SHORT-TERM CACHE: Skip fetch if prices are < 30 seconds old
+        const PRICE_CACHE_TTL = 30 * 1000 // 30 seconds
+        if (!forceRefresh && state.priceStatus.lastUpdated) {
+          const lastFetch = new Date(state.priceStatus.lastUpdated).getTime()
+          if (Date.now() - lastFetch < PRICE_CACHE_TTL && Object.keys(state.prices).length > 0) {
+            return { success: true, prices: state.prices, cached: true }
+          }
+        }
 
         // Get unique assets from active signals and eggs
         const activeSignals = state.signals.filter(s => s.status === 'active')
