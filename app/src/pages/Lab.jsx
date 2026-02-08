@@ -1,14 +1,16 @@
 import { motion, AnimatePresence } from 'framer-motion'
-import { FlaskConical, BarChart3, LineChart, Trophy } from 'lucide-react'
+import { FlaskConical, BarChart3, LineChart, Trophy, Dna } from 'lucide-react'
 import useStore from '../store/useStore'
 import BacktestTab from '../components/lab/BacktestTab'
 import PaperTradeTab from '../components/lab/PaperTradeTab'
 import BenchmarkTab from '../components/lab/BenchmarkTab'
+import EvolutionTab from '../components/lab/EvolutionTab'
 
 const tabs = [
   { id: 'backtest', label: 'Backtest', icon: BarChart3 },
   { id: 'paperTrade', label: 'Paper Trade', icon: LineChart },
   { id: 'benchmark', label: 'Benchmark', icon: Trophy },
+  { id: 'evolution', label: 'Evolution', icon: Dna },
 ]
 
 export default function Lab() {
@@ -70,6 +72,11 @@ export default function Lab() {
         {labActiveTab === 'benchmark' && (
           <motion.div key="benchmark" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}>
             <BenchmarkTab />
+          </motion.div>
+        )}
+        {labActiveTab === 'evolution' && (
+          <motion.div key="evolution" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}>
+            <EvolutionTab />
           </motion.div>
         )}
       </AnimatePresence>

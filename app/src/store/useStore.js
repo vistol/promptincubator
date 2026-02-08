@@ -2371,6 +2371,76 @@ If no truly new strategy can be generated, you must invent a new angle rather th
       },
       setActiveBenchmark: (id) => set({ activeBenchmarkId: id }),
 
+      // ─── Evolution System ────────────────────────────────────
+      evolution: {
+        generation: 0,
+        rankings: [],           // [{rank, promptId, promptName, grade, score, backtestId, pnl, winRate}]
+        history: [],            // [{generation, rankings, timestamp}]
+        importedStrategies: [], // [{source, name, content}]
+        marketData: null,       // Binance Futures data cache
+        status: 'idle',         // idle|importing|backtesting|evolving|feeding
+        log: []                 // [{timestamp, message, type}]
+      },
+
+      setEvolutionStatus: (status) => set((state) => ({
+        evolution: { ...state.evolution, status }
+      })),
+
+      addEvolutionLog: (message, type = 'info') => set((state) => ({
+        evolution: {
+          ...state.evolution,
+          log: [...state.evolution.log, {
+            timestamp: new Date().toISOString(),
+            message,
+            type // 'info' | 'success' | 'warning' | 'error'
+          }].slice(-100) // Keep last 100 entries
+        }
+      })),
+
+      clearEvolutionLog: () => set((state) => ({
+        evolution: { ...state.evolution, log: [] }
+      })),
+
+      setEvolutionRankings: (rankings) => set((state) => ({
+        evolution: { ...state.evolution, rankings }
+      })),
+
+      addEvolutionGeneration: (rankings) => set((state) => ({
+        evolution: {
+          ...state.evolution,
+          generation: state.evolution.generation + 1,
+          rankings,
+          history: [...state.evolution.history, {
+            generation: state.evolution.generation + 1,
+            rankings,
+            timestamp: new Date().toISOString()
+          }].slice(-20) // Keep last 20 generations
+        }
+      })),
+
+      addImportedStrategy: (strategy) => set((state) => ({
+        evolution: {
+          ...state.evolution,
+          importedStrategies: [...state.evolution.importedStrategies, strategy].slice(-50)
+        }
+      })),
+
+      setEvolutionMarketData: (data) => set((state) => ({
+        evolution: { ...state.evolution, marketData: data }
+      })),
+
+      resetEvolution: () => set((state) => ({
+        evolution: {
+          generation: 0,
+          rankings: [],
+          history: [],
+          importedStrategies: state.evolution.importedStrategies, // Keep imported
+          marketData: state.evolution.marketData, // Keep market data
+          status: 'idle',
+          log: []
+        }
+      })),
+
       // Auto-sync helper (debounced in real usage)
       triggerSync: () => {
         const state = get()
@@ -2402,7 +2472,9 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         benchmarks: state.benchmarks,
         paperPortfolio: state.paperPortfolio,
         paperTradeStrategies: state.paperTradeStrategies,
-        paperTradeActive: state.paperTradeActive
+        paperTradeActive: state.paperTradeActive,
+        // Evolution data persistence
+        evolution: state.evolution
       }),
       // Deep merge settings to preserve default values for non-persisted properties
       merge: (persistedState, currentState) => ({
@@ -2431,7 +2503,14 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         benchmarks: persistedState?.benchmarks || currentState.benchmarks,
         paperPortfolio: persistedState?.paperPortfolio || currentState.paperPortfolio,
         paperTradeStrategies: persistedState?.paperTradeStrategies || currentState.paperTradeStrategies,
-        paperTradeActive: persistedState?.paperTradeActive || currentState.paperTradeActive
+        paperTradeActive: persistedState?.paperTradeActive || currentState.paperTradeActive,
+        // Evolution merge
+        evolution: {
+          ...currentState.evolution,
+          ...(persistedState?.evolution || {}),
+          // Always reset status to idle on load
+          status: 'idle'
+        }
       })
     }
   )

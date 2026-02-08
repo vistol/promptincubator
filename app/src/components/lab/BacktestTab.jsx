@@ -5,6 +5,7 @@ import useStore from '../../store/useStore'
 import { fetchHistoricalData, fetchMultiSymbolData, getPricesAtTime } from '../../lib/historicalDataService'
 import { generateTradesFromPrompt } from '../../lib/aiService'
 import { runBacktest } from '../../lib/backtestEngine'
+import { calculateBacktestGrade } from '../../lib/autoBacktest'
 import EquityCurve from './EquityCurve'
 
 const INTERVALS = [
@@ -25,104 +26,6 @@ const RANGE_PRESETS = [
   { label: '1 Month', days: 30 },
   { label: '3 Months', days: 90 },
 ]
-
-// ─── Scoring System ───────────────────────────────────────────────
-
-/**
- * Calculate a grade (A-F) for a backtest based on key metrics
- * Returns { grade, color, bgColor, score, verdict }
- */
-const calculateBacktestGrade = (result) => {
-  if (!result) return { grade: '?', color: 'text-gray-400', bgColor: 'bg-gray-500/10 border-gray-500/30', score: 0, verdict: 'Sin datos' }
-
-  const pnl = result.totalPnlPercent || 0
-  const winRate = result.winRate || 0
-  const profitFactor = result.profitFactor === Infinity ? 10 : (result.profitFactor || 0)
-  const maxDD = result.maxDrawdown || 0
-  const sharpe = result.sharpeRatio || 0
-  const totalTrades = result.totalTrades || 0
-
-  // Score each metric (0-100)
-  // PnL: -20% = 0pts, 0% = 30pts, +20% = 70pts, +50% = 100pts
-  const pnlScore = Math.max(0, Math.min(100, ((pnl + 20) / 70) * 100))
-
-  // Win Rate: 30% = 0pts, 50% = 40pts, 60% = 70pts, 75%+ = 100pts
-  const wrScore = Math.max(0, Math.min(100, ((winRate - 30) / 45) * 100))
-
-  // Profit Factor: 0 = 0pts, 1 = 30pts, 1.5 = 60pts, 2.5+ = 100pts
-  const pfScore = Math.max(0, Math.min(100, (profitFactor / 2.5) * 100))
-
-  // Max Drawdown (inverted — lower is better): 50% = 0pts, 20% = 50pts, 5% = 100pts
-  const ddScore = Math.max(0, Math.min(100, ((50 - maxDD) / 45) * 100))
-
-  // Sharpe Ratio: -1 = 0pts, 0 = 30pts, 1 = 60pts, 2+ = 100pts
-  const sharpeScore = Math.max(0, Math.min(100, ((sharpe + 1) / 3) * 100))
-
-  // Trade count penalty — fewer than 5 trades = unreliable
-  const tradePenalty = totalTrades < 3 ? 0.5 : totalTrades < 5 ? 0.75 : totalTrades < 10 ? 0.9 : 1.0
-
-  // Weighted composite score
-  const rawScore = (
-    pnlScore * 0.30 +
-    wrScore * 0.20 +
-    pfScore * 0.20 +
-    ddScore * 0.15 +
-    sharpeScore * 0.15
-  ) * tradePenalty
-
-  const score = Math.round(rawScore)
-
-  // Grade thresholds
-  let grade, color, bgColor
-  if (score >= 80) { grade = 'A'; color = 'text-emerald-400'; bgColor = 'bg-emerald-500/10 border-emerald-500/40' }
-  else if (score >= 65) { grade = 'B'; color = 'text-accent-cyan'; bgColor = 'bg-accent-cyan/10 border-accent-cyan/40' }
-  else if (score >= 50) { grade = 'C'; color = 'text-yellow-400'; bgColor = 'bg-yellow-500/10 border-yellow-500/40' }
-  else if (score >= 35) { grade = 'D'; color = 'text-orange-400'; bgColor = 'bg-orange-500/10 border-orange-500/40' }
-  else { grade = 'F'; color = 'text-accent-red'; bgColor = 'bg-accent-red/10 border-accent-red/40' }
-
-  // Generate human-readable verdict
-  const verdict = generateVerdict(pnl, winRate, profitFactor, maxDD, sharpe, totalTrades, grade)
-
-  return { grade, color, bgColor, score, verdict }
-}
-
-/**
- * Generate a contextual verdict in Spanish
- */
-const generateVerdict = (pnl, winRate, profitFactor, maxDD, sharpe, totalTrades, grade) => {
-  const parts = []
-
-  // Main assessment
-  if (grade === 'A') {
-    parts.push('Estrategia excelente.')
-  } else if (grade === 'B') {
-    parts.push('Estrategia buena con potencial.')
-  } else if (grade === 'C') {
-    parts.push('Resultados medianos.')
-  } else if (grade === 'D') {
-    parts.push('Estrategia debil.')
-  } else {
-    parts.push('Estrategia no viable.')
-  }
-
-  // PnL insight
-  if (pnl > 20) parts.push(`+${pnl.toFixed(1)}% de retorno es fuerte.`)
-  else if (pnl > 5) parts.push(`+${pnl.toFixed(1)}% positivo pero moderado.`)
-  else if (pnl > 0) parts.push(`+${pnl.toFixed(1)}% apenas cubre costos.`)
-  else if (pnl > -5) parts.push(`${pnl.toFixed(1)}% perdida menor.`)
-  else parts.push(`${pnl.toFixed(1)}% perdida significativa.`)
-
-  // Key weakness
-  if (maxDD > 30) parts.push(`Drawdown de ${maxDD.toFixed(0)}% es muy riesgoso.`)
-  else if (winRate < 40 && totalTrades >= 5) parts.push(`Win rate bajo (${winRate.toFixed(0)}%), muchos trades perdedores.`)
-  else if (profitFactor < 1 && profitFactor > 0) parts.push(`PF < 1 significa que pierde mas de lo que gana.`)
-  else if (profitFactor >= 2) parts.push(`PF de ${profitFactor.toFixed(1)} indica buena relacion riesgo/beneficio.`)
-
-  // Trade count warning
-  if (totalTrades < 5) parts.push(`Solo ${totalTrades} trades — resultados poco confiables.`)
-
-  return parts.join(' ')
-}
 
 // ─── Component ────────────────────────────────────────────────────
 

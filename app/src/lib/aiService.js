@@ -985,6 +985,78 @@ export const calculateStandardIPE = (trade) => {
 // ============================================
 // TEST CONNECTION FUNCTION - Used by Settings page
 // ============================================
+/**
+ * Generic LLM text call — sends a text prompt and returns plain text response
+ * Used by Evolution Engine for crossover, mutation, innovation, and strategy conversion
+ * Reuses the same provider routing as generateTradesFromPrompt but without trade parsing
+ *
+ * @param {string} textPrompt - The text prompt to send
+ * @param {Object} settings - App settings with apiKeys
+ * @param {string} modelOverride - Optional model override (e.g. 'groq', 'gemini')
+ * @returns {string} Plain text response from LLM
+ */
+export const callLLMForText = async (textPrompt, settings, modelOverride = null) => {
+  const rawProvider = modelOverride || settings.aiProvider || 'groq'
+  const aiProvider = MODEL_TO_PROVIDER[rawProvider] || rawProvider
+  const apiKey = settings.apiKeys?.[aiProvider]
+
+  if (!apiKey) {
+    // Try fallback providers in order of cost (cheapest first)
+    const fallbackOrder = ['groq', 'sambanova', 'google', 'xai', 'openai', 'anthropic']
+    let fallbackProvider = null
+    let fallbackKey = null
+
+    for (const fb of fallbackOrder) {
+      if (settings.apiKeys?.[fb]) {
+        fallbackProvider = fb
+        fallbackKey = settings.apiKeys[fb]
+        break
+      }
+    }
+
+    if (!fallbackProvider) {
+      throw new Error('No API key available for any provider. Please configure at least one API key in Settings.')
+    }
+
+    // Use fallback
+    return callLLMForText(textPrompt, settings, fallbackProvider)
+  }
+
+  let response
+  try {
+    switch (aiProvider) {
+      case 'anthropic':
+        response = await callClaudeAPI(textPrompt, apiKey, 'claude-sonnet-4-20250514')
+        break
+      case 'google':
+        response = await callGeminiAPI(textPrompt, apiKey, 'gemini-2.5-flash')
+        break
+      case 'openai':
+        response = await callOpenAIAPI(textPrompt, apiKey, 'gpt-4')
+        break
+      case 'xai':
+        response = await callGrokAPI(textPrompt, apiKey)
+        break
+      case 'groq':
+        response = await callGroqAPI(textPrompt, apiKey)
+        break
+      case 'sambanova':
+        response = await callSambaNovaAPI(textPrompt, apiKey)
+        break
+      default:
+        throw new Error(`Unknown provider: ${aiProvider}`)
+    }
+  } catch (error) {
+    throw new Error(`LLM call failed (${aiProvider}): ${error.message}`)
+  }
+
+  if (!response || typeof response !== 'string') {
+    throw new Error('Empty response from LLM')
+  }
+
+  return response.trim()
+}
+
 export const testAPIConnection = async (providerId, apiKey) => {
   console.log(`Testing connection for ${providerId}...`)
 
