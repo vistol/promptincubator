@@ -172,6 +172,9 @@ export const autoBacktestPrompt = async (prompt, settings, onLog = () => {}, opt
       const sampleTime = sampleTimes[i]
       const sampleEnd = i < sampleTimes.length - 1 ? sampleTimes[i + 1] : endTime
 
+      // Notify caller of sample-level progress
+      options.onSampleProgress?.(i + 1, sampleTimes.length)
+
       try {
         onLog(`Muestra ${i + 1}/${sampleTimes.length}: generando trades...`, 'info')
 

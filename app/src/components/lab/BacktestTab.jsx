@@ -33,6 +33,7 @@ export default function BacktestTab() {
   const backtests = useStore((s) => s.backtests) || []
   const addBacktest = useStore((s) => s.addBacktest)
   const deleteBacktest = useStore((s) => s.deleteBacktest)
+  const clearAllBacktests = useStore((s) => s.clearAllBacktests)
   const prompts = useStore((s) => s.prompts) || []
   const settings = useStore((s) => s.settings)
 
@@ -40,6 +41,7 @@ export default function BacktestTab() {
   const [wizardStep, setWizardStep] = useState(1)
   const [expandedId, setExpandedId] = useState(null)
   const [collapsedGroups, setCollapsedGroups] = useState({})
+  const [confirmClearAll, setConfirmClearAll] = useState(false)
 
   // Wizard state
   const [selectedPromptId, setSelectedPromptId] = useState(null)
@@ -337,13 +339,41 @@ export default function BacktestTab() {
       ) : (
         <>
           {!showWizard && (
-            <button
-              onClick={() => { resetWizard(); setShowWizard(true) }}
-              className="w-full p-3 rounded-xl border border-dashed border-quant-border text-gray-400 text-xs hover:border-accent-cyan hover:text-accent-cyan transition-all"
-            >
-              <Plus size={14} className="inline mr-1" />
-              New Backtest
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => { resetWizard(); setShowWizard(true) }}
+                className="flex-1 p-3 rounded-xl border border-dashed border-quant-border text-gray-400 text-xs hover:border-accent-cyan hover:text-accent-cyan transition-all"
+              >
+                <Plus size={14} className="inline mr-1" />
+                New Backtest
+              </button>
+              {backtests.length > 0 && (
+                confirmClearAll ? (
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => { clearAllBacktests(); setConfirmClearAll(false) }}
+                      className="px-3 py-2 rounded-xl bg-accent-red/10 border border-accent-red/30 text-accent-red text-[10px] font-medium hover:bg-accent-red/20 transition-all"
+                    >
+                      Confirmar ({backtests.length})
+                    </button>
+                    <button
+                      onClick={() => setConfirmClearAll(false)}
+                      className="px-2 py-2 rounded-xl border border-quant-border text-gray-500 text-[10px] hover:text-gray-300 transition-all"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmClearAll(true)}
+                    className="px-3 py-2 rounded-xl border border-quant-border text-gray-500 text-[10px] hover:border-accent-red/30 hover:text-accent-red transition-all"
+                  >
+                    <Trash2 size={12} className="inline mr-1" />
+                    Borrar todo
+                  </button>
+                )
+              )}
+            </div>
           )}
 
           {/* Grouped backtests */}

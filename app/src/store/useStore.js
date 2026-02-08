@@ -2350,6 +2350,14 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         }))
       },
       setActiveBacktest: (id) => set({ activeBacktestId: id }),
+      clearAllBacktests: () => {
+        const client = get().getClient()
+        const ids = get().backtests.map(b => b.id)
+        if (client) {
+          ids.forEach(id => deleteBacktestFromCloud(client, id).catch(() => {}))
+        }
+        set({ backtests: [], activeBacktestId: null })
+      },
 
       // Paper Trading
       paperPortfolio: null,

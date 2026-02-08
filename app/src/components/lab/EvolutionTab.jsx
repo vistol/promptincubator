@@ -33,11 +33,20 @@ export default function EvolutionTab() {
   const [showTournamentConfig, setShowTournamentConfig] = useState(false)
   const [maxLossCutoff, setMaxLossCutoff] = useState(-10) // Exclude prompts with PnL worse than this
   const [isCancelling, setIsCancelling] = useState(false)
+  const [tournamentProgress, setTournamentProgress] = useState(null)
+  const [, setTick] = useState(0) // Force re-render for elapsed/ETA timer
   const cancelRef = useRef(false) // For cancelling running operations
   const logEndRef = useRef(null)
 
   const activePrompts = prompts.filter(p => p.status === 'active')
   const isRunning = evolution.status !== 'idle'
+
+  // Timer: force re-render every second for live elapsed/ETA display
+  useEffect(() => {
+    if (!tournamentProgress) return
+    const interval = setInterval(() => setTick(t => t + 1), 1000)
+    return () => clearInterval(interval)
+  }, [tournamentProgress !== null])
 
   // ─── Tournament filtering: exclude already-ranked losers ─────
   // Build a map of promptId → worst PnL from previous rankings
@@ -176,6 +185,17 @@ export default function EvolutionTab() {
     // results lives outside try so finally can always save partial rankings
     const results = []
     let consecutivePromptErrors = 0
+    let errorCount = 0
+    const tournamentStart = Date.now()
+
+    // Initialize progress panel
+    setTournamentProgress({
+      current: 0, total: eligiblePrompts.length,
+      currentName: '', phase: 'starting',
+      startTime: tournamentStart,
+      currentSample: 0, totalSamples: 0,
+      completedResults: [], errorCount: 0
+    })
 
     try {
       if (excludedPrompts.length > 0) {
@@ -198,8 +218,26 @@ export default function EvolutionTab() {
         const prompt = eligiblePrompts[i]
         log(`[${i + 1}/${eligiblePrompts.length}] ${prompt.name}...`, 'info')
 
+        // Update progress panel
+        setTournamentProgress(prev => prev ? {
+          ...prev, current: i + 1, currentName: prompt.name, phase: 'backtesting',
+          currentSample: 0, totalSamples: 0,
+          completedResults: results.map(r => ({
+            name: r.prompt.name, grade: r.grade.grade,
+            score: r.grade.score, pnl: r.backtestData?.result?.totalPnlPercent || 0
+          })),
+          errorCount
+        } : null)
+
         try {
-          const result = await autoBacktestPrompt(prompt, settings, log, { shouldCancel: () => cancelRef.current })
+          const result = await autoBacktestPrompt(prompt, settings, log, {
+            shouldCancel: () => cancelRef.current,
+            onSampleProgress: (sample, totalSamples) => {
+              setTournamentProgress(prev => prev ? {
+                ...prev, currentSample: sample, totalSamples, phase: 'backtesting'
+              } : null)
+            }
+          })
 
           if (result) {
             // Save backtest to store — silenced so storage errors don't kill tournament
@@ -213,10 +251,12 @@ export default function EvolutionTab() {
             consecutivePromptErrors = 0 // Reset on success
           } else {
             consecutivePromptErrors++
+            errorCount++
             log(`${prompt.name}: Backtest fallido, saltando`, 'warning')
           }
         } catch (err) {
           consecutivePromptErrors++
+          errorCount++
           const isQuota = /quota|exceed|exhaust|429|rate.?limit/i.test(err.message)
           log(`${prompt.name}: Error — ${err.message}`, 'error')
 
@@ -235,6 +275,7 @@ export default function EvolutionTab() {
 
         // Longer delay between prompts to respect rate limits (Groq free: 12K TPM)
         if (i < eligiblePrompts.length - 1) {
+          setTournamentProgress(prev => prev ? { ...prev, phase: 'waiting' } : null)
           log('Esperando 15s antes del siguiente prompt (rate limit)...', 'info')
           const cancelled = await cancellableSleep(15000, () => cancelRef.current)
           if (cancelled) {
@@ -271,6 +312,7 @@ export default function EvolutionTab() {
         log('Torneo sin resultados — ningun backtest fue exitoso. Verifica tu API key y cuota disponible.', 'error')
       }
       setEvolutionStatus('idle')
+      setTournamentProgress(null)
       cancelRef.current = false
     }
   }
@@ -395,25 +437,140 @@ export default function EvolutionTab() {
     }
   }
 
+  // ─── Helper: format time as mm:ss or hh:mm:ss ─────────────
+  const formatTime = (ms) => {
+    const totalSec = Math.floor(ms / 1000)
+    const h = Math.floor(totalSec / 3600)
+    const m = Math.floor((totalSec % 3600) / 60)
+    const s = totalSec % 60
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    return `${m}:${String(s).padStart(2, '0')}`
+  }
+
   return (
     <div className="space-y-4">
-      {/* Header Stats */}
-      <div className="grid grid-cols-3 gap-2">
-        <div className="bg-quant-card border border-quant-border rounded-xl p-3 text-center">
-          <span className="text-[10px] text-gray-500 uppercase block">Generacion</span>
-          <span className="text-xl font-bold text-accent-cyan font-mono">{evolution.generation}</span>
+      {/* Header Stats OR Tournament Progress Panel */}
+      {tournamentProgress ? (() => {
+        const tp = tournamentProgress
+        const elapsed = Date.now() - tp.startTime
+        const completed = tp.completedResults.length
+        const pct = tp.total > 0 ? Math.round((completed / tp.total) * 100) : 0
+        const avgPerPrompt = completed > 0 ? elapsed / completed : 0
+        const remaining = completed > 0 ? avgPerPrompt * (tp.total - completed) : 0
+        const topResults = [...tp.completedResults].sort((a, b) => b.score - a.score).slice(0, 3)
+
+        return (
+          <div className="bg-quant-card border border-accent-yellow/30 rounded-xl p-4 space-y-3">
+            {/* Title + percentage */}
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-accent-yellow flex items-center gap-1.5">
+                <Trophy size={14} />
+                Torneo en progreso
+              </span>
+              <span className="text-sm font-bold text-white font-mono">{pct}%</span>
+            </div>
+
+            {/* Progress bar */}
+            <div className="w-full bg-quant-surface rounded-full h-2.5 overflow-hidden">
+              <motion.div
+                className="h-full bg-gradient-to-r from-accent-yellow to-accent-cyan rounded-full"
+                initial={{ width: 0 }}
+                animate={{ width: `${pct}%` }}
+                transition={{ duration: 0.5, ease: 'easeOut' }}
+              />
+            </div>
+
+            {/* Stats row */}
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">Transcurrido</span>
+                <span className="text-white font-mono">{formatTime(elapsed)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">ETA restante</span>
+                <span className="text-accent-cyan font-mono font-bold">
+                  {completed > 0 ? `~${formatTime(remaining)}` : 'calculando...'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">Progreso</span>
+                <span className="text-white font-mono">{completed}/{tp.total} prompts</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">Velocidad</span>
+                <span className="text-gray-300 font-mono">
+                  {completed > 0 ? `~${Math.round(avgPerPrompt / 1000)}s/prompt` : '-'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">Exitosos</span>
+                <span className="text-accent-green font-mono">{completed}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">Errores</span>
+                <span className={`font-mono ${tp.errorCount > 0 ? 'text-accent-red' : 'text-gray-500'}`}>{tp.errorCount}</span>
+              </div>
+            </div>
+
+            {/* Current prompt */}
+            <div className="bg-quant-surface/50 rounded-lg px-3 py-2">
+              <div className="flex items-center justify-between text-[10px]">
+                <span className="text-gray-500">Actual</span>
+                <span className="text-gray-500">
+                  {tp.phase === 'waiting' ? 'Esperando (rate limit)...' :
+                   tp.totalSamples > 0 ? `Muestra ${tp.currentSample}/${tp.totalSamples}` : 'Preparando...'}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="text-[10px] text-accent-cyan font-mono">[{tp.current}/{tp.total}]</span>
+                <span className="text-xs text-white truncate">{tp.currentName}</span>
+                {tp.phase === 'backtesting' && <Loader2 size={10} className="text-accent-cyan animate-spin shrink-0" />}
+                {tp.phase === 'waiting' && <Clock size={10} className="text-yellow-400 shrink-0" />}
+              </div>
+            </div>
+
+            {/* Live mini-ranking of completed results */}
+            {topResults.length > 0 && (
+              <div>
+                <span className="text-[9px] text-gray-500 uppercase">Mejores hasta ahora</span>
+                <div className="mt-1 space-y-0.5">
+                  {topResults.map((r, i) => (
+                    <div key={i} className="flex items-center justify-between text-[10px]">
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-gray-600 w-3">#{i + 1}</span>
+                        <span className="text-gray-300 truncate max-w-[140px]">{r.name}</span>
+                      </span>
+                      <span className="flex items-center gap-2 font-mono">
+                        <span className="text-gray-400">{r.grade} ({r.score})</span>
+                        <span className={r.pnl >= 0 ? 'text-accent-green' : 'text-accent-red'}>
+                          {r.pnl >= 0 ? '+' : ''}{r.pnl.toFixed(1)}%
+                        </span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })() : (
+        <div className="grid grid-cols-3 gap-2">
+          <div className="bg-quant-card border border-quant-border rounded-xl p-3 text-center">
+            <span className="text-[10px] text-gray-500 uppercase block">Generacion</span>
+            <span className="text-xl font-bold text-accent-cyan font-mono">{evolution.generation}</span>
+          </div>
+          <div className="bg-quant-card border border-quant-border rounded-xl p-3 text-center">
+            <span className="text-[10px] text-gray-500 uppercase block">Prompts</span>
+            <span className="text-xl font-bold text-white font-mono">{activePrompts.length}</span>
+          </div>
+          <div className="bg-quant-card border border-quant-border rounded-xl p-3 text-center">
+            <span className="text-[10px] text-gray-500 uppercase block">Mejor</span>
+            <span className={`text-xl font-bold font-mono ${evolution.rankings[0]?.color || 'text-gray-400'}`}>
+              {evolution.rankings[0]?.grade || '-'}
+            </span>
+          </div>
         </div>
-        <div className="bg-quant-card border border-quant-border rounded-xl p-3 text-center">
-          <span className="text-[10px] text-gray-500 uppercase block">Prompts</span>
-          <span className="text-xl font-bold text-white font-mono">{activePrompts.length}</span>
-        </div>
-        <div className="bg-quant-card border border-quant-border rounded-xl p-3 text-center">
-          <span className="text-[10px] text-gray-500 uppercase block">Mejor</span>
-          <span className={`text-xl font-bold font-mono ${evolution.rankings[0]?.color || 'text-gray-400'}`}>
-            {evolution.rankings[0]?.grade || '-'}
-          </span>
-        </div>
-      </div>
+      )}
 
       {/* Action Buttons */}
       <div className="grid grid-cols-2 gap-2">
