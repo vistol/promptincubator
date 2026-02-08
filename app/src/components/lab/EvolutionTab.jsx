@@ -21,6 +21,7 @@ export default function EvolutionTab() {
   const addEvolutionLog = useStore((s) => s.addEvolutionLog)
   const clearEvolutionLog = useStore((s) => s.clearEvolutionLog)
   const setEvolutionRankings = useStore((s) => s.setEvolutionRankings)
+  const saveTournamentToHistory = useStore((s) => s.saveTournamentToHistory)
   const addEvolutionGeneration = useStore((s) => s.addEvolutionGeneration)
   const addImportedStrategy = useStore((s) => s.addImportedStrategy)
   const addImportedLibraryId = useStore((s) => s.addImportedLibraryId)
@@ -118,16 +119,23 @@ export default function EvolutionTab() {
       if (allNewPrompts.length === 0) {
         log('No se importaron estrategias nuevas', 'warning')
       } else {
+        let importedCount = 0
         for (const p of allNewPrompts) {
-          addPrompt(p)
-          // Track library IDs for dedup
-          if (p.libraryId) addImportedLibraryId(p.libraryId)
-          addImportedStrategy({
-            source: p.provenance?.type || p.source || 'unknown',
-            name: p.name,
-            content: p.content.slice(0, 200),
-            qualityScore: p.provenance?.qualityScore || p.qualityScore || 0
-          })
+          try {
+            addPrompt(p)
+            // Track library IDs for dedup
+            if (p.libraryId) addImportedLibraryId(p.libraryId)
+            addImportedStrategy({
+              source: p.provenance?.type || p.source || 'unknown',
+              name: p.name,
+              content: p.content.slice(0, 200),
+              qualityScore: p.provenance?.qualityScore || p.qualityScore || 0
+            })
+            importedCount++
+          } catch (storeErr) {
+            log(`Almacenamiento lleno al importar "${p.name}" — ${importedCount}/${allNewPrompts.length} importados antes del error`, 'warning')
+            break
+          }
         }
         const libCount = allNewPrompts.filter(p => p.libraryId).length
         const ghCount = allNewPrompts.length - libCount
@@ -194,8 +202,12 @@ export default function EvolutionTab() {
           const result = await autoBacktestPrompt(prompt, settings, log, { shouldCancel: () => cancelRef.current })
 
           if (result) {
-            // Save backtest to store — double-wrapped so NO error can escape
-            try { addBacktest(result.backtestData) } catch (_e) { /* sync error, ignore */ }
+            // Save backtest to store — silenced so storage errors don't kill tournament
+            try {
+              addBacktest(result.backtestData)
+            } catch (_e) {
+              // localStorage or cloud sync quota exceeded — backtest won't persist but tournament continues
+            }
             results.push({ prompt, backtestData: result.backtestData, grade: result.grade })
             log(`${prompt.name}: Grade ${result.grade.grade} (${result.grade.score}/100)`, 'success')
             consecutivePromptErrors = 0 // Reset on success
@@ -235,18 +247,28 @@ export default function EvolutionTab() {
       log(`Error en torneo: ${err.message}`, 'error')
     } finally {
       // ── ALWAYS save results, even partial, even on crash ──
-      try {
-        if (results.length > 0) {
-          const rankings = tournamentRank(results)
-          setEvolutionRankings(rankings)
-          const completed = results.length === eligiblePrompts.length
-          const status = cancelRef.current ? 'cancelado' : completed ? 'completado' : 'parcial'
-          log(`Torneo ${status}: ${results.length}/${eligiblePrompts.length} backtests → Mejor: ${rankings[0]?.promptName || '?'} (Grade ${rankings[0]?.grade || '?'})`, 'success')
-        } else {
-          log('Torneo sin resultados — ningun backtest fue exitoso. Verifica tu API key y cuota disponible.', 'error')
+      if (results.length > 0) {
+        const rankings = tournamentRank(results)
+
+        // Save rankings + tournament history (localStorage is now slim, should never hit quota)
+        try {
+          saveTournamentToHistory(rankings)
+        } catch (storeErr) {
+          console.error('Failed to persist tournament:', storeErr)
+          log(`Error al persistir rankings: ${storeErr.message}`, 'warning')
         }
-      } catch (rankErr) {
-        log(`Error guardando rankings: ${rankErr.message}`, 'error')
+
+        // ALWAYS log results regardless of save success
+        const completed = results.length === eligiblePrompts.length
+        const status = cancelRef.current ? 'cancelado' : completed ? 'completado' : 'parcial'
+        log(`Torneo ${status}: ${results.length}/${eligiblePrompts.length} backtests → Mejor: ${rankings[0]?.promptName || '?'} (Grade ${rankings[0]?.grade || '?'})`, 'success')
+
+        // Log individual results so user always sees them even if store save failed
+        for (const r of rankings.slice(0, 5)) {
+          log(`  #${r.rank} ${r.promptName}: Grade ${r.grade} (${r.score}/100) — PnL ${r.pnl?.toFixed(1)}%`, 'info')
+        }
+      } else {
+        log('Torneo sin resultados — ningun backtest fue exitoso. Verifica tu API key y cuota disponible.', 'error')
       }
       setEvolutionStatus('idle')
       cancelRef.current = false
@@ -289,7 +311,7 @@ export default function EvolutionTab() {
         topPromptData[1].grade,
         settings
       )
-      addPrompt(child1)
+      try { addPrompt(child1) } catch (_e) { log('Advertencia: almacenamiento lleno, crossover no se persistio', 'warning') }
       newPrompts.push(child1)
       log(`Crossover creado: ${child1.name}`, 'success')
 
@@ -306,7 +328,7 @@ export default function EvolutionTab() {
         topPromptData[0].grade,
         settings
       )
-      addPrompt(child2)
+      try { addPrompt(child2) } catch (_e) { log('Advertencia: almacenamiento lleno, mutacion no se persistio', 'warning') }
       newPrompts.push(child2)
       log(`Mutacion creada: ${child2.name}`, 'success')
 
@@ -321,12 +343,12 @@ export default function EvolutionTab() {
         evolution.marketData,
         settings
       )
-      addPrompt(child3)
+      try { addPrompt(child3) } catch (_e) { log('Advertencia: almacenamiento lleno, innovacion no se persistio', 'warning') }
       newPrompts.push(child3)
       log(`Innovacion creada: ${child3.name}`, 'success')
 
       // Save generation
-      addEvolutionGeneration(evolution.rankings)
+      try { addEvolutionGeneration(evolution.rankings) } catch (_e) { /* storage full */ }
       log(`Generacion ${evolution.generation + 1}: ${newPrompts.length} nuevos prompts creados`, 'success')
 
     } catch (err) {
@@ -696,25 +718,40 @@ export default function EvolutionTab() {
               {new Date(Object.values(evolution.marketData)[0]?.timestamp || 0).toLocaleTimeString()}
             </span>
           </h3>
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             {Object.entries(evolution.marketData).map(([symbol, data]) => (
-              <div key={symbol} className="flex items-center justify-between text-[10px]">
-                <span className="text-gray-400 font-mono">{symbol}</span>
-                <div className="flex items-center gap-3">
+              <div key={symbol} className="text-[10px]">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400 font-mono font-bold">{symbol}</span>
+                  <div className="flex items-center gap-2">
+                    {data.price?.markPrice && (
+                      <span className="text-gray-200 font-mono font-bold">
+                        ${data.price.markPrice.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                      </span>
+                    )}
+                    {data.ticker24h?.priceChangePercent != null && (
+                      <span className={data.ticker24h.priceChangePercent >= 0 ? 'text-accent-green' : 'text-accent-red'}>
+                        {data.ticker24h.priceChangePercent >= 0 ? '+' : ''}{data.ticker24h.priceChangePercent.toFixed(2)}%
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 text-gray-500 mt-0.5">
                   {data.funding && (
                     <span className={parseFloat(data.funding.fundingRatePercent) > 0 ? 'text-accent-green' : 'text-accent-red'}>
                       F: {data.funding.fundingRatePercent}%
                     </span>
                   )}
                   {data.openInterest && (
-                    <span className="text-gray-500">
-                      OI: {(data.openInterest.openInterest / 1000).toFixed(0)}K
-                    </span>
+                    <span>OI: {(data.openInterest.openInterest / 1000).toFixed(0)}K</span>
                   )}
                   {data.longShort && (
                     <span className={data.longShort.longShortRatio > 1 ? 'text-accent-green' : 'text-accent-red'}>
                       L/S: {data.longShort.longShortRatio.toFixed(2)}
                     </span>
+                  )}
+                  {data.ticker24h && (
+                    <span>Vol: {(data.ticker24h.quoteVolume / 1e9).toFixed(1)}B</span>
                   )}
                 </div>
               </div>
@@ -732,7 +769,7 @@ export default function EvolutionTab() {
           >
             <span className="flex items-center gap-1.5 font-bold">
               <Clock size={12} />
-              Historial ({evolution.history.length} generaciones)
+              Historial ({evolution.history.length} torneos)
             </span>
             {showHistory ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
@@ -745,20 +782,36 @@ export default function EvolutionTab() {
                 className="overflow-hidden"
               >
                 <div className="divide-y divide-quant-border border-t border-quant-border">
-                  {[...evolution.history].reverse().map((gen) => (
-                    <div key={gen.generation} className="px-3 py-2">
+                  {[...evolution.history].reverse().map((gen, idx) => (
+                    <div key={`${gen.generation}-${gen.timestamp}-${idx}`} className="px-3 py-2">
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-bold text-accent-cyan">Gen {gen.generation}</span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-accent-cyan">Gen {gen.generation}</span>
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${
+                            gen.type === 'evolution' ? 'bg-accent-cyan/10 text-accent-cyan' : 'bg-accent-yellow/10 text-accent-yellow'
+                          }`}>
+                            {gen.type === 'evolution' ? 'Evolucion' : 'Torneo'}
+                          </span>
+                        </span>
                         <span className="text-[10px] text-gray-500">
-                          {new Date(gen.timestamp).toLocaleDateString()}
+                          {new Date(gen.timestamp).toLocaleDateString()} {new Date(gen.timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}
                         </span>
                       </div>
-                      <div className="flex items-center gap-2 text-[10px] text-gray-400">
-                        {gen.rankings.slice(0, 3).map((r, i) => (
-                          <span key={i} className="flex items-center gap-0.5">
-                            <span className={r.color}>{r.grade}</span>
-                            <span className="text-gray-600">{r.promptName?.slice(0, 12)}</span>
-                          </span>
+                      <div className="space-y-0.5">
+                        {(gen.rankings || []).slice(0, 5).map((r, i) => (
+                          <div key={i} className="flex items-center justify-between text-[10px]">
+                            <span className="flex items-center gap-1">
+                              <span className="text-gray-600 w-3">#{r.rank || i + 1}</span>
+                              <span className={r.color || 'text-gray-400'}>{r.grade || '?'}</span>
+                              <span className="text-gray-400">{r.promptName?.slice(0, 20) || 'Sin nombre'}</span>
+                            </span>
+                            <span className="flex items-center gap-2 text-gray-500">
+                              <span>{r.score ?? 0}/100</span>
+                              <span className={(r.pnl ?? 0) >= 0 ? 'text-accent-green' : 'text-accent-red'}>
+                                {(r.pnl ?? 0) >= 0 ? '+' : ''}{(r.pnl ?? 0).toFixed(1)}%
+                              </span>
+                            </span>
+                          </div>
                         ))}
                       </div>
                     </div>

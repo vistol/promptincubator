@@ -63,6 +63,36 @@ const EXECUTION_LIMITS = {
   swing: 7 * 24 * 60 * 60 * 1000 // 7 days max
 }
 
+// ─── localStorage slim helpers ──────────────────────────────
+// localStorage has a ~5MB limit. These strip heavy fields (trades, equityCurve)
+// so only summary metrics are persisted. Full data stays in RAM + Supabase.
+
+const slimBacktestForStorage = (bt) => {
+  if (!bt?.result) return bt
+  const { trades, equityCurve, ...slimResult } = bt.result
+  return { ...bt, result: { ...slimResult, _slim: true } }
+}
+
+const slimBenchmarkForStorage = (bm) => {
+  if (!bm?.result?.results) return bm
+  return {
+    ...bm,
+    result: {
+      ...bm.result,
+      results: bm.result.results.map(r => {
+        const { trades, equityCurve, ...slim } = r
+        return { ...slim, _slim: true }
+      })
+    }
+  }
+}
+
+const slimEvolutionForStorage = (evo) => {
+  if (!evo) return evo
+  const { marketData, log, ...rest } = evo
+  return rest // marketData = transient cache, log = session-only
+}
+
 // Eggs start empty - user creates them via prompts
 const initialEggs = []
 
@@ -2419,6 +2449,22 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         evolution: { ...state.evolution, rankings }
       })),
 
+      // Save tournament results to history WITHOUT incrementing generation
+      // This preserves every tournament run so results are never lost
+      saveTournamentToHistory: (rankings) => set((state) => ({
+        evolution: {
+          ...state.evolution,
+          rankings,
+          history: [...state.evolution.history, {
+            generation: state.evolution.generation,
+            rankings,
+            timestamp: new Date().toISOString(),
+            type: 'tournament'
+          }].slice(-30) // Keep last 30 entries
+        }
+      })),
+
+      // Increment generation + save to history (used after evolution creates new prompts)
       addEvolutionGeneration: (rankings) => set((state) => ({
         evolution: {
           ...state.evolution,
@@ -2427,8 +2473,9 @@ If no truly new strategy can be generated, you must invent a new angle rather th
           history: [...state.evolution.history, {
             generation: state.evolution.generation + 1,
             rankings,
-            timestamp: new Date().toISOString()
-          }].slice(-20) // Keep last 20 generations
+            timestamp: new Date().toISOString(),
+            type: 'evolution'
+          }].slice(-30) // Keep last 30 entries
         }
       })),
 
@@ -2489,14 +2536,18 @@ If no truly new strategy can be generated, you must invent a new angle rather th
           gracePeriodEnabled: state.settings.gracePeriodEnabled,
           gracePeriodMinutes: state.settings.gracePeriodMinutes
         },
-        // Lab data persistence
-        backtests: state.backtests,
-        benchmarks: state.benchmarks,
-        paperPortfolio: state.paperPortfolio,
+        // Lab data: slim + capped for localStorage safety (~5MB limit)
+        // Full data stays in Zustand RAM + Supabase cloud
+        backtests: state.backtests.slice(0, 10).map(slimBacktestForStorage),
+        benchmarks: state.benchmarks.slice(0, 5).map(slimBenchmarkForStorage),
+        paperPortfolio: state.paperPortfolio ? {
+          ...state.paperPortfolio,
+          history: (state.paperPortfolio.history || []).slice(-200)
+        } : null,
         paperTradeStrategies: state.paperTradeStrategies,
         paperTradeActive: state.paperTradeActive,
-        // Evolution data persistence
-        evolution: state.evolution
+        // Evolution: persist rankings + history but NOT marketData cache or session log
+        evolution: slimEvolutionForStorage(state.evolution)
       }),
       // Deep merge settings to preserve default values for non-persisted properties
       merge: (persistedState, currentState) => ({
@@ -2526,12 +2577,26 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         paperPortfolio: persistedState?.paperPortfolio || currentState.paperPortfolio,
         paperTradeStrategies: persistedState?.paperTradeStrategies || currentState.paperTradeStrategies,
         paperTradeActive: persistedState?.paperTradeActive || currentState.paperTradeActive,
-        // Evolution merge
+        // Evolution merge — normalize old history entries + restore transient fields
         evolution: {
           ...currentState.evolution,
           ...(persistedState?.evolution || {}),
-          // Always reset status to idle on load
-          status: 'idle'
+          // Transient fields not persisted — always reset on load
+          marketData: null,
+          status: 'idle',
+          log: [],
+          // Migrate old history entries: backfill type, rank, score, pnl, color
+          history: (persistedState?.evolution?.history || []).map(entry => ({
+            ...entry,
+            type: entry.type || 'tournament',
+            rankings: (entry.rankings || []).map((r, i) => ({
+              ...r,
+              rank: r.rank || i + 1,
+              score: r.score ?? 0,
+              pnl: r.pnl ?? 0,
+              color: r.color || 'text-gray-400'
+            }))
+          }))
         }
       })
     }

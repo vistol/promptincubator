@@ -1058,17 +1058,67 @@ export const fetchLongShortRatio = async (symbol = 'BTCUSDT') => {
 }
 
 /**
- * Fetch all Binance Futures data for a symbol
+ * Fetch current mark price from Binance Futures
+ */
+export const fetchMarkPrice = async (symbol = 'BTCUSDT') => {
+  try {
+    const response = await fetch(`${BINANCE_FAPI}/fapi/v1/premiumIndex?symbol=${symbol}`)
+    if (!response.ok) throw new Error(`Binance API error: ${response.status}`)
+    const data = await response.json()
+
+    return {
+      symbol,
+      markPrice: parseFloat(data.markPrice),
+      indexPrice: parseFloat(data.indexPrice),
+      lastFundingRate: parseFloat(data.lastFundingRate),
+      time: data.time
+    }
+  } catch (error) {
+    console.error(`Mark price fetch failed for ${symbol}:`, error)
+    return null
+  }
+}
+
+/**
+ * Fetch 24h price change statistics
+ */
+export const fetch24hChange = async (symbol = 'BTCUSDT') => {
+  try {
+    const response = await fetch(`${BINANCE_FAPI}/fapi/v1/ticker/24hr?symbol=${symbol}`)
+    if (!response.ok) throw new Error(`Binance API error: ${response.status}`)
+    const data = await response.json()
+
+    return {
+      symbol,
+      lastPrice: parseFloat(data.lastPrice),
+      priceChangePercent: parseFloat(data.priceChangePercent),
+      highPrice: parseFloat(data.highPrice),
+      lowPrice: parseFloat(data.lowPrice),
+      volume: parseFloat(data.volume),
+      quoteVolume: parseFloat(data.quoteVolume)
+    }
+  } catch (error) {
+    console.error(`24h change fetch failed for ${symbol}:`, error)
+    return null
+  }
+}
+
+/**
+ * Fetch all Binance Futures data for a symbol (price + funding + OI + L/S)
  */
 export const fetchBinanceFuturesData = async (symbol = 'BTCUSDT') => {
-  const [funding, oi, longShort] = await Promise.all([
+  const [funding, oi, longShort, price, ticker24h] = await Promise.all([
     fetchFundingRate(symbol),
     fetchOpenInterest(symbol),
-    fetchLongShortRatio(symbol)
+    fetchLongShortRatio(symbol),
+    fetchMarkPrice(symbol),
+    fetch24hChange(symbol)
   ])
 
   return {
     symbol,
+    price,
+    ticker24h,
     funding,
     openInterest: oi,
     longShort,
@@ -1086,7 +1136,10 @@ export const fetchAllFuturesData = async (symbols = ['BTCUSDT', 'ETHUSDT', 'SOLU
   for (const symbol of symbols) {
     try {
       results[symbol] = await fetchBinanceFuturesData(symbol)
-      onLog(`${symbol}: funding ${results[symbol].funding?.fundingRatePercent || '?'}%, OI: ${results[symbol].openInterest?.openInterest?.toFixed(0) || '?'}, L/S: ${results[symbol].longShort?.longShortRatio?.toFixed(2) || '?'}`, 'success')
+      const d = results[symbol]
+      const priceStr = d.price?.markPrice ? `$${d.price.markPrice.toLocaleString()}` : '?'
+      const chgStr = d.ticker24h?.priceChangePercent != null ? `${d.ticker24h.priceChangePercent >= 0 ? '+' : ''}${d.ticker24h.priceChangePercent.toFixed(2)}%` : ''
+      onLog(`${symbol}: ${priceStr} (${chgStr}) | funding ${d.funding?.fundingRatePercent || '?'}% | OI: ${d.openInterest?.openInterest?.toFixed(0) || '?'} | L/S: ${d.longShort?.longShortRatio?.toFixed(2) || '?'}`, 'success')
     } catch (err) {
       onLog(`${symbol}: Error — ${err.message}`, 'error')
     }
@@ -1101,32 +1154,46 @@ export const fetchAllFuturesData = async (symbols = ['BTCUSDT', 'ETHUSDT', 'SOLU
 export const formatMarketDataForLLM = (futuresData) => {
   if (!futuresData || Object.keys(futuresData).length === 0) return 'No market data available.'
 
-  const lines = ['Current Binance Futures Market Data:']
+  const lines = ['DATOS ACTUALES DEL MERCADO (Binance Futures, en tiempo real):']
 
   for (const [symbol, data] of Object.entries(futuresData)) {
     const parts = [`${symbol}:`]
 
+    // Current price (most important for the LLM)
+    if (data.price?.markPrice) {
+      parts.push(`Precio actual: $${data.price.markPrice.toLocaleString()}`)
+    }
+    if (data.ticker24h) {
+      const chg = data.ticker24h.priceChangePercent
+      parts.push(`Cambio 24h: ${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%`)
+      parts.push(`Rango 24h: $${data.ticker24h.lowPrice.toLocaleString()} - $${data.ticker24h.highPrice.toLocaleString()}`)
+      parts.push(`Volumen 24h: ${(data.ticker24h.quoteVolume / 1e9).toFixed(2)}B USDT`)
+    }
+
     if (data.funding) {
       const rate = data.funding.fundingRatePercent
-      parts.push(`Funding Rate ${rate}%`)
+      parts.push(`Funding Rate: ${rate}%`)
       if (parseFloat(rate) > 0.05) parts.push('(longs paying shorts, bullish crowding)')
       else if (parseFloat(rate) < -0.01) parts.push('(shorts paying longs, bearish crowding)')
     }
 
     if (data.openInterest) {
-      parts.push(`Open Interest: ${data.openInterest.openInterest.toLocaleString()} contracts`)
+      parts.push(`Open Interest: ${data.openInterest.openInterest.toLocaleString()} contratos`)
     }
 
     if (data.longShort) {
       const ratio = data.longShort.longShortRatio
       parts.push(`L/S Ratio: ${ratio.toFixed(2)}`)
-      if (ratio > 2.5) parts.push('(extremely bullish sentiment)')
-      else if (ratio > 1.5) parts.push('(bullish sentiment)')
-      else if (ratio < 0.7) parts.push('(bearish sentiment)')
+      if (ratio > 2.5) parts.push('(extremadamente alcista)')
+      else if (ratio > 1.5) parts.push('(sentimiento alcista)')
+      else if (ratio < 0.7) parts.push('(sentimiento bajista)')
     }
 
     lines.push(parts.join(' | '))
   }
+
+  lines.push('')
+  lines.push('IMPORTANTE: Usa estos precios EXACTOS como referencia para entry, stop loss y take profit. NO inventes precios diferentes.')
 
   return lines.join('\n')
 }

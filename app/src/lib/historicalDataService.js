@@ -9,6 +9,9 @@ const STORE_NAME = 'klines'
 // Max candles per Binance request
 const MAX_CANDLES_PER_REQUEST = 1000
 
+// Cache TTL: 4 hours — avoid stale price data
+const CACHE_TTL_MS = 4 * 60 * 60 * 1000
+
 // Interval mappings
 const INTERVAL_MS = {
   '1m': 60 * 1000,
@@ -41,7 +44,7 @@ const getCacheKey = (symbol, interval, startTime, endTime) => {
   return `${symbol}-${interval}-${startTime}-${endTime}`
 }
 
-// Get cached data from IndexedDB
+// Get cached data from IndexedDB (with TTL check)
 const getCachedData = async (symbol, interval, startTime, endTime) => {
   try {
     const db = await openDB()
@@ -51,7 +54,15 @@ const getCachedData = async (symbol, interval, startTime, endTime) => {
 
     return new Promise((resolve, reject) => {
       const request = store.get(key)
-      request.onsuccess = () => resolve(request.result?.data || null)
+      request.onsuccess = () => {
+        const result = request.result
+        if (!result?.data) return resolve(null)
+        // Check cache TTL — reject stale data
+        if (result.cachedAt && (Date.now() - result.cachedAt) > CACHE_TTL_MS) {
+          return resolve(null) // Expired, will re-fetch
+        }
+        resolve(result.data)
+      }
       request.onerror = () => resolve(null)
     })
   } catch {
