@@ -653,6 +653,33 @@ export default function Settings() {
                         </button>
                       </div>
 
+                      {/* Provenance Badge */}
+                      {prompt.provenance && (
+                        <div className="flex items-center gap-2 mb-2 flex-wrap">
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                            prompt.provenance.type === 'built-in-library' ? 'bg-amber-500/20 text-amber-400' :
+                            prompt.provenance.type === 'imported-github' ? 'bg-green-500/20 text-green-400' :
+                            prompt.provenance.type === 'imported-pinescript' ? 'bg-purple-500/20 text-purple-400' :
+                            prompt.provenance.type?.startsWith('evolution-') ? 'bg-cyan-500/20 text-cyan-400' :
+                            'bg-gray-500/20 text-gray-400'
+                          }`}>
+                            {prompt.provenance.type === 'built-in-library' ? 'Libro' :
+                             prompt.provenance.type === 'imported-github' ? 'GitHub' :
+                             prompt.provenance.type === 'imported-pinescript' ? 'PineScript' :
+                             prompt.provenance.type === 'evolution-crossover' ? 'Crossover' :
+                             prompt.provenance.type === 'evolution-mutation' ? 'Mutacion' :
+                             prompt.provenance.type === 'evolution-innovation' ? 'Innovacion' :
+                             'Manual'}
+                          </span>
+                          {prompt.provenance.source && prompt.provenance.source !== 'manual' && (
+                            <span className="text-[10px] text-gray-500 truncate max-w-[250px]">{prompt.provenance.source}</span>
+                          )}
+                          {prompt.provenance.qualityScore > 0 && (
+                            <span className="text-[10px] text-gray-600 font-mono">{prompt.provenance.qualityScore}%</span>
+                          )}
+                        </div>
+                      )}
+
                       <p className="text-sm text-gray-400 font-mono line-clamp-2">
                         {prompt.content}
                       </p>
@@ -661,9 +688,14 @@ export default function Settings() {
                         <span className="text-xs text-gray-500">
                           {prompt.content ? `${prompt.content.length} chars` : 'No description'}
                         </span>
-                        <span className="text-xs text-gray-500">
-                          {prompt.updatedAt ? new Date(prompt.updatedAt).toLocaleDateString() : '-'}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          {prompt.provenance?.chapter && (
+                            <span className="text-[10px] text-gray-600 truncate max-w-[150px]">{prompt.provenance.chapter}</span>
+                          )}
+                          <span className="text-xs text-gray-500">
+                            {prompt.updatedAt ? new Date(prompt.updatedAt).toLocaleDateString() : '-'}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>

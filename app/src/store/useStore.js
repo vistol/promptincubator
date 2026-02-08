@@ -125,7 +125,8 @@ PRIORIDAD: BTC > ETH > SOL > BNB > el resto`,
     winRate: 0,
     profitFactor: 0,
     totalPnl: 0,
-    maxDrawdown: 0
+    maxDrawdown: 0,
+    provenance: { type: 'manual', source: 'Seed prompt — PromptHatcher', chapter: '', url: '', importedAt: '2025-01-15T10:30:00Z', method: 'Prompt semilla incluido con la aplicacion', qualityScore: 80, notes: 'Estrategia original de niveles psicologicos en numeros redondos.' }
   },
   {
     id: 'prompt-2',
@@ -171,7 +172,8 @@ Responde SOLO con los trades que pasen todos los pasos.`,
     winRate: 0,
     profitFactor: 0,
     totalPnl: 0,
-    maxDrawdown: 0
+    maxDrawdown: 0,
+    provenance: { type: 'manual', source: 'Seed prompt — PromptHatcher', chapter: '', url: '', importedAt: '2025-01-15T10:30:00Z', method: 'Prompt semilla incluido con la aplicacion', qualityScore: 85, notes: 'Sistema mecanico puro de calculo por formulas exactas.' }
   },
   {
     id: 'prompt-3',
@@ -214,7 +216,8 @@ PASO 5 - Si BTC esta a menos de 0.5% de un nivel redondo, NO operar nada (incert
     winRate: 0,
     profitFactor: 0,
     totalPnl: 0,
-    maxDrawdown: 0
+    maxDrawdown: 0,
+    provenance: { type: 'manual', source: 'Seed prompt — PromptHatcher', chapter: '', url: '', importedAt: '2025-01-15T10:30:00Z', method: 'Prompt semilla incluido con la aplicacion', qualityScore: 82, notes: 'Estrategia de divergencias entre BTC y altcoins usando niveles psicologicos.' }
   }
 ]
 
@@ -237,7 +240,17 @@ const useStore = create(
             winRate: 0,
             profitFactor: 0,
             totalPnl: 0,
-            maxDrawdown: 0
+            maxDrawdown: 0,
+            provenance: prompt.provenance || {
+              type: 'manual',
+              source: 'manual',
+              chapter: '',
+              url: '',
+              importedAt: new Date().toISOString(),
+              method: 'Creacion manual via editor',
+              qualityScore: 0,
+              notes: ''
+            }
           }]
         }))
         get().triggerSync()
@@ -2377,6 +2390,7 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         rankings: [],           // [{rank, promptId, promptName, grade, score, backtestId, pnl, winRate}]
         history: [],            // [{generation, rankings, timestamp}]
         importedStrategies: [], // [{source, name, content}]
+        importedLibraryIds: [], // IDs de estrategias de la biblioteca ya importadas (dedup)
         marketData: null,       // Binance Futures data cache
         status: 'idle',         // idle|importing|backtesting|evolving|feeding
         log: []                 // [{timestamp, message, type}]
@@ -2425,6 +2439,13 @@ If no truly new strategy can be generated, you must invent a new angle rather th
         }
       })),
 
+      addImportedLibraryId: (id) => set((state) => ({
+        evolution: {
+          ...state.evolution,
+          importedLibraryIds: [...new Set([...state.evolution.importedLibraryIds, id])]
+        }
+      })),
+
       setEvolutionMarketData: (data) => set((state) => ({
         evolution: { ...state.evolution, marketData: data }
       })),
@@ -2435,6 +2456,7 @@ If no truly new strategy can be generated, you must invent a new angle rather th
           rankings: [],
           history: [],
           importedStrategies: state.evolution.importedStrategies, // Keep imported
+          importedLibraryIds: state.evolution.importedLibraryIds, // Keep library dedup
           marketData: state.evolution.marketData, // Keep market data
           status: 'idle',
           log: []

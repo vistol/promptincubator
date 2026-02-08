@@ -852,7 +852,17 @@ export const fetchFreqtradeStrategies = async (settings, onLog = () => {}) => {
           updatedAt: new Date().toISOString(),
           source: 'github-freqtrade',
           sourceRepo: repo.fullName,
-          qualityScore: validation.score
+          qualityScore: validation.score,
+          provenance: {
+            type: 'imported-github',
+            source: `GitHub: ${repo.fullName} — Freqtrade (Python)`,
+            chapter: `Archivo: ${file.name}`,
+            url: `https://github.com/${repo.fullName}`,
+            importedAt: new Date().toISOString(),
+            method: 'GitHub API search + regex pre-parse + 2-phase LLM conversion',
+            qualityScore: validation.score,
+            notes: `Stars: ${repo.stars}. Validacion: ${validation.passed}/${validation.total} checks.`
+          }
         })
         onLog(`Importada: ${file.name} — calidad ${validation.score}%`, 'success')
       }
@@ -921,7 +931,17 @@ export const fetchPineScriptStrategies = async (settings, onLog = () => {}) => {
           updatedAt: new Date().toISOString(),
           source: 'github-pinescript',
           sourceRepo: repo.fullName,
-          qualityScore: validation.score
+          qualityScore: validation.score,
+          provenance: {
+            type: 'imported-pinescript',
+            source: `GitHub: ${repo.fullName} — PineScript (TradingView)`,
+            chapter: `Archivo: ${file.name}`,
+            url: `https://github.com/${repo.fullName}`,
+            importedAt: new Date().toISOString(),
+            method: 'GitHub API search + PineScript pre-parse + 2-phase LLM conversion',
+            qualityScore: validation.score,
+            notes: `Stars: ${repo.stars}. Validacion: ${validation.passed}/${validation.total} checks.`
+          }
         })
         onLog(`Importada: ${file.name} [Pine] — calidad ${validation.score}%`, 'success')
       }
@@ -933,6 +953,36 @@ export const fetchPineScriptStrategies = async (settings, onLog = () => {}) => {
   }
 
   return newPrompts
+}
+
+// ─── Built-in Strategy Library Import ────────────────────────────
+
+import { getUnimportedStrategies } from './strategyLibrary'
+
+/**
+ * Import strategies from the built-in library (no API needed, always works)
+ * @param {string[]} alreadyImportedIds - Library IDs already imported (for dedup)
+ * @param {Function} onLog - Log callback
+ * @returns {Array} Array of prompt objects ready to addPrompt
+ */
+export const importBuiltInStrategies = (alreadyImportedIds = [], onLog = () => {}) => {
+  onLog('Cargando estrategias de la biblioteca (libros de trading)...', 'info')
+
+  const newStrategies = getUnimportedStrategies(alreadyImportedIds)
+
+  if (newStrategies.length === 0) {
+    onLog('Todas las estrategias de la biblioteca ya fueron importadas', 'info')
+    return []
+  }
+
+  onLog(`${newStrategies.length} estrategias nuevas de la biblioteca disponibles`, 'success')
+
+  return newStrategies.map(s => ({
+    ...s,
+    libraryId: s.id, // Original library ID for dedup tracking
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  }))
 }
 
 // ─── Binance Futures: Market Data ────────────────────────────────

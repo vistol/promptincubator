@@ -52,7 +52,17 @@ INSTRUCCIONES:
     updatedAt: new Date().toISOString(),
     source: 'evolution-crossover',
     parents: [promptA.id, promptB.id],
-    generation: (Math.max(promptA.generation || 0, promptB.generation || 0)) + 1
+    generation: (Math.max(promptA.generation || 0, promptB.generation || 0)) + 1,
+    provenance: {
+      type: 'evolution-crossover',
+      source: `Crossover: "${promptA.name}" x "${promptB.name}"`,
+      chapter: '',
+      url: '',
+      importedAt: new Date().toISOString(),
+      method: 'LLM genetic crossover de los 2 mejores prompts del torneo',
+      qualityScore: Math.round(((gradeA?.score || 0) + (gradeB?.score || 0)) / 2),
+      notes: `Padre A: ${promptA.name} (${gradeA?.grade || '?'}, ${gradeA?.score || '?'}/100). Padre B: ${promptB.name} (${gradeB?.grade || '?'}, ${gradeB?.score || '?'}/100).`
+    }
   }
 }
 
@@ -122,7 +132,17 @@ INSTRUCCIONES:
     updatedAt: new Date().toISOString(),
     source: 'evolution-mutation',
     parents: [prompt.id],
-    generation: (prompt.generation || 0) + 1
+    generation: (prompt.generation || 0) + 1,
+    provenance: {
+      type: 'evolution-mutation',
+      source: `Mutacion de "${prompt.name}"`,
+      chapter: '',
+      url: '',
+      importedAt: new Date().toISOString(),
+      method: 'LLM mutation targeting debilidades del backtest',
+      qualityScore: grade?.score || 0,
+      notes: `Original: ${grade?.grade || '?'} (${grade?.score || '?'}/100). Debilidades: ${weaknesses.join('; ')}`
+    }
   }
 }
 
@@ -191,6 +211,16 @@ INSTRUCCIONES:
     updatedAt: new Date().toISOString(),
     source: 'evolution-innovation',
     parents: topPrompts.slice(0, 3).map(p => p.prompt.id),
-    generation: (topPrompts[0]?.prompt?.generation || 0) + 1
+    generation: (topPrompts[0]?.prompt?.generation || 0) + 1,
+    provenance: {
+      type: 'evolution-innovation',
+      source: `Innovacion inspirada en top ${topPrompts.length} estrategias`,
+      chapter: '',
+      url: '',
+      importedAt: new Date().toISOString(),
+      method: 'LLM novel strategy generation con datos de mercado',
+      qualityScore: 0,
+      notes: `Mercado: ${marketData ? 'Datos disponibles' : 'Sin datos'}. Inspiracion: ${topPrompts.map(p => p.prompt.name).join(', ')}`
+    }
   }
 }
