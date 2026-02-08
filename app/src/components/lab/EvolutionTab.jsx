@@ -123,10 +123,10 @@ export default function EvolutionTab() {
         log(`${prompt.name}: Error — ${err.message}`, 'error')
       }
 
-      // Delay between prompts
+      // Longer delay between prompts to respect rate limits (Groq free: 12K TPM)
       if (i < activePrompts.length - 1) {
-        log('Esperando 3s antes del siguiente prompt...', 'info')
-        await new Promise(r => setTimeout(r, 3000))
+        log('Esperando 15s antes del siguiente prompt (rate limit)...', 'info')
+        await new Promise(r => setTimeout(r, 15000))
       }
     }
 

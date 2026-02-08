@@ -148,14 +148,30 @@ export const autoBacktestPrompt = async (prompt, settings, onLog = () => {}) => 
           continue
         }
 
-        // Generate trades using AI with historical prices
-        const trades = await generateTradesFromPrompt(
-          prompt,
-          settings,
-          3,
-          null,
-          pricesAtTime
-        )
+        // Generate trades using AI with historical prices (with rate limit retry)
+        let trades = null
+        const MAX_SAMPLE_RETRIES = 2
+        for (let attempt = 0; attempt <= MAX_SAMPLE_RETRIES; attempt++) {
+          try {
+            trades = await generateTradesFromPrompt(
+              prompt,
+              settings,
+              3,
+              null,
+              pricesAtTime
+            )
+            break // Success
+          } catch (apiErr) {
+            const isRateLimit = /rate.?limit|429|too many|tokens per minute|TPM|RPM/i.test(apiErr.message)
+            if (isRateLimit && attempt < MAX_SAMPLE_RETRIES) {
+              const waitSec = 10 * (attempt + 1) // 10s, 20s
+              onLog(`Muestra ${i + 1}: Rate limit, esperando ${waitSec}s... (intento ${attempt + 1}/${MAX_SAMPLE_RETRIES + 1})`, 'warning')
+              await new Promise(r => setTimeout(r, waitSec * 1000))
+            } else {
+              throw apiErr // Re-throw if not rate limit or exhausted retries
+            }
+          }
+        }
 
         if (trades && trades.length > 0) {
           // Assign sample time to trades
@@ -176,9 +192,11 @@ export const autoBacktestPrompt = async (prompt, settings, onLog = () => {}) => 
         onLog(`Muestra ${i + 1}: Error — ${err.message}`, 'error')
       }
 
-      // Small delay between samples to avoid rate limiting
+      // Longer delay between samples to avoid rate limiting (8s for free tier Groq)
       if (i < sampleTimes.length - 1) {
-        await new Promise(r => setTimeout(r, 1500))
+        const delaySec = 8
+        onLog(`Esperando ${delaySec}s antes de muestra ${i + 2}...`, 'info')
+        await new Promise(r => setTimeout(r, delaySec * 1000))
       }
     }
 

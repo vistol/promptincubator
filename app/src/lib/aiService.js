@@ -985,10 +985,33 @@ export const calculateStandardIPE = (trade) => {
 // ============================================
 // TEST CONNECTION FUNCTION - Used by Settings page
 // ============================================
+// Helper: detect rate limit errors from error message
+const isRateLimitError = (errorMsg) => {
+  const patterns = ['rate limit', 'rate_limit', 'too many requests', '429', 'tokens per minute', 'TPM', 'RPM', 'requests per minute', 'quota exceeded']
+  const lower = errorMsg.toLowerCase()
+  return patterns.some(p => lower.includes(p.toLowerCase()))
+}
+
+// Helper: call a specific provider
+const callProvider = async (provider, prompt, apiKey) => {
+  switch (provider) {
+    case 'anthropic': return await callClaudeAPI(prompt, apiKey, 'claude-sonnet-4-20250514')
+    case 'google': return await callGeminiAPI(prompt, apiKey, 'gemini-2.5-flash')
+    case 'openai': return await callOpenAIAPI(prompt, apiKey, 'gpt-4')
+    case 'xai': return await callGrokAPI(prompt, apiKey)
+    case 'groq': return await callGroqAPI(prompt, apiKey)
+    case 'sambanova': return await callSambaNovaAPI(prompt, apiKey)
+    default: throw new Error(`Unknown provider: ${provider}`)
+  }
+}
+
+// Provider fallback order (cheapest/fastest first)
+const PROVIDER_FALLBACK_ORDER = ['groq', 'sambanova', 'google', 'xai', 'openai', 'anthropic']
+
 /**
  * Generic LLM text call — sends a text prompt and returns plain text response
  * Used by Evolution Engine for crossover, mutation, innovation, and strategy conversion
- * Reuses the same provider routing as generateTradesFromPrompt but without trade parsing
+ * Includes: retry with exponential backoff + automatic fallback on rate limit
  *
  * @param {string} textPrompt - The text prompt to send
  * @param {Object} settings - App settings with apiKeys
@@ -997,64 +1020,62 @@ export const calculateStandardIPE = (trade) => {
  */
 export const callLLMForText = async (textPrompt, settings, modelOverride = null) => {
   const rawProvider = modelOverride || settings.aiProvider || 'groq'
-  const aiProvider = MODEL_TO_PROVIDER[rawProvider] || rawProvider
-  const apiKey = settings.apiKeys?.[aiProvider]
+  const primaryProvider = MODEL_TO_PROVIDER[rawProvider] || rawProvider
+  const primaryKey = settings.apiKeys?.[primaryProvider]
 
-  if (!apiKey) {
-    // Try fallback providers in order of cost (cheapest first)
-    const fallbackOrder = ['groq', 'sambanova', 'google', 'xai', 'openai', 'anthropic']
-    let fallbackProvider = null
-    let fallbackKey = null
+  // Build ordered list of providers to try (primary first, then fallbacks)
+  const providersToTry = []
+  if (primaryKey) {
+    providersToTry.push({ provider: primaryProvider, key: primaryKey })
+  }
+  for (const fb of PROVIDER_FALLBACK_ORDER) {
+    if (fb !== primaryProvider && settings.apiKeys?.[fb]) {
+      providersToTry.push({ provider: fb, key: settings.apiKeys[fb] })
+    }
+  }
 
-    for (const fb of fallbackOrder) {
-      if (settings.apiKeys?.[fb]) {
-        fallbackProvider = fb
-        fallbackKey = settings.apiKeys[fb]
-        break
+  if (providersToTry.length === 0) {
+    throw new Error('No API key available for any provider. Please configure at least one API key in Settings.')
+  }
+
+  const MAX_RETRIES = 2
+  let lastError = null
+
+  // Try each provider with retries
+  for (const { provider, key } of providersToTry) {
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const response = await callProvider(provider, textPrompt, key)
+
+        if (!response || typeof response !== 'string') {
+          throw new Error('Empty response from LLM')
+        }
+
+        return response.trim()
+      } catch (error) {
+        lastError = error
+
+        if (isRateLimitError(error.message)) {
+          if (attempt < MAX_RETRIES) {
+            // Exponential backoff: 5s, 15s, 45s
+            const waitMs = 5000 * Math.pow(3, attempt)
+            console.warn(`[callLLMForText] Rate limit on ${provider}, waiting ${waitMs / 1000}s (attempt ${attempt + 1}/${MAX_RETRIES + 1})`)
+            await new Promise(r => setTimeout(r, waitMs))
+          } else {
+            // Exhausted retries for this provider, try next
+            console.warn(`[callLLMForText] Rate limit on ${provider} after ${MAX_RETRIES + 1} attempts, trying next provider...`)
+            break
+          }
+        } else {
+          // Non-rate-limit error, try next provider immediately
+          console.error(`[callLLMForText] ${provider} failed: ${error.message}`)
+          break
+        }
       }
     }
-
-    if (!fallbackProvider) {
-      throw new Error('No API key available for any provider. Please configure at least one API key in Settings.')
-    }
-
-    // Use fallback
-    return callLLMForText(textPrompt, settings, fallbackProvider)
   }
 
-  let response
-  try {
-    switch (aiProvider) {
-      case 'anthropic':
-        response = await callClaudeAPI(textPrompt, apiKey, 'claude-sonnet-4-20250514')
-        break
-      case 'google':
-        response = await callGeminiAPI(textPrompt, apiKey, 'gemini-2.5-flash')
-        break
-      case 'openai':
-        response = await callOpenAIAPI(textPrompt, apiKey, 'gpt-4')
-        break
-      case 'xai':
-        response = await callGrokAPI(textPrompt, apiKey)
-        break
-      case 'groq':
-        response = await callGroqAPI(textPrompt, apiKey)
-        break
-      case 'sambanova':
-        response = await callSambaNovaAPI(textPrompt, apiKey)
-        break
-      default:
-        throw new Error(`Unknown provider: ${aiProvider}`)
-    }
-  } catch (error) {
-    throw new Error(`LLM call failed (${aiProvider}): ${error.message}`)
-  }
-
-  if (!response || typeof response !== 'string') {
-    throw new Error('Empty response from LLM')
-  }
-
-  return response.trim()
+  throw new Error(`All providers failed. Last error: ${lastError?.message || 'Unknown'}`)
 }
 
 export const testAPIConnection = async (providerId, apiKey) => {
