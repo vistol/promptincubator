@@ -30,6 +30,8 @@ export default function EvolutionTab() {
   const [showLog, setShowLog] = useState(true)
   const [showTournamentConfig, setShowTournamentConfig] = useState(false)
   const [maxLossCutoff, setMaxLossCutoff] = useState(-10) // Exclude prompts with PnL worse than this
+  const [isCancelling, setIsCancelling] = useState(false)
+  const cancelRef = useRef(false) // For cancelling running operations
   const logEndRef = useRef(null)
 
   const activePrompts = prompts.filter(p => p.status === 'active')
@@ -75,45 +77,65 @@ export default function EvolutionTab() {
     if (isRunning) return
     setEvolutionStatus('importing')
     clearEvolutionLog()
+    cancelRef.current = false
     log('Iniciando importacion de estrategias externas (Freqtrade + PineScript)...', 'info')
 
     const allNewPrompts = []
 
     try {
-      // Source 1: Freqtrade (Python)
-      log('─── Fuente 1: Freqtrade (Python) ───', 'info')
-      const ftPrompts = await fetchFreqtradeStrategies(settings, log)
-      allNewPrompts.push(...ftPrompts)
-    } catch (err) {
-      log(`Error Freqtrade: ${err.message}`, 'error')
-    }
-
-    try {
-      // Source 2: PineScript/TradingView
-      log('─── Fuente 2: PineScript (TradingView) ───', 'info')
-      const psPrompts = await fetchPineScriptStrategies(settings, log)
-      allNewPrompts.push(...psPrompts)
-    } catch (err) {
-      log(`Error PineScript: ${err.message}`, 'error')
-    }
-
-    if (allNewPrompts.length === 0) {
-      log('No se pudieron importar estrategias de ninguna fuente', 'warning')
-    } else {
-      for (const p of allNewPrompts) {
-        addPrompt(p)
-        addImportedStrategy({
-          source: p.source || 'github',
-          name: p.name,
-          content: p.content.slice(0, 200),
-          qualityScore: p.qualityScore
-        })
+      try {
+        // Source 1: Freqtrade (Python)
+        log('─── Fuente 1: Freqtrade (Python) ───', 'info')
+        const ftPrompts = await fetchFreqtradeStrategies(settings, log)
+        allNewPrompts.push(...ftPrompts)
+      } catch (err) {
+        log(`Error Freqtrade: ${err.message}`, 'error')
       }
-      log(`Total: ${allNewPrompts.length} estrategias importadas (calidad promedio: ${Math.round(allNewPrompts.reduce((s, p) => s + (p.qualityScore || 0), 0) / allNewPrompts.length)}%)`, 'success')
-    }
 
-    setEvolutionStatus('idle')
+      if (cancelRef.current) { log('Importacion cancelada', 'warning'); return }
+
+      try {
+        // Source 2: PineScript/TradingView
+        log('─── Fuente 2: PineScript (TradingView) ───', 'info')
+        const psPrompts = await fetchPineScriptStrategies(settings, log)
+        allNewPrompts.push(...psPrompts)
+      } catch (err) {
+        log(`Error PineScript: ${err.message}`, 'error')
+      }
+
+      if (allNewPrompts.length === 0) {
+        log('No se pudieron importar estrategias de ninguna fuente', 'warning')
+      } else {
+        for (const p of allNewPrompts) {
+          addPrompt(p)
+          addImportedStrategy({
+            source: p.source || 'github',
+            name: p.name,
+            content: p.content.slice(0, 200),
+            qualityScore: p.qualityScore
+          })
+        }
+        log(`Total: ${allNewPrompts.length} estrategias importadas (calidad promedio: ${Math.round(allNewPrompts.reduce((s, p) => s + (p.qualityScore || 0), 0) / allNewPrompts.length)}%)`, 'success')
+      }
+    } catch (err) {
+      log(`Error fatal en importacion: ${err.message}`, 'error')
+    } finally {
+      setEvolutionStatus('idle')
+      cancelRef.current = false
+    }
   }
+
+  // ─── Action: Cancel running operation ───────────────────────
+  const handleCancel = () => {
+    cancelRef.current = true
+    setIsCancelling(true)
+    log('Cancelando operacion...', 'warning')
+  }
+
+  // Reset cancelling state when operation finishes
+  useEffect(() => {
+    if (!isRunning && isCancelling) setIsCancelling(false)
+  }, [isRunning, isCancelling])
 
   // ─── Action: Tournament ──────────────────────────────────────
   const handleTournament = async () => {
@@ -125,54 +147,88 @@ export default function EvolutionTab() {
 
     setEvolutionStatus('backtesting')
     clearEvolutionLog()
-
-    if (excludedPrompts.length > 0) {
-      log(`Excluidos ${excludedPrompts.length} prompts con PnL < ${maxLossCutoff}%:`, 'warning')
-      for (const ep of excludedPrompts) {
-        const pnl = rankedPnlMap[ep.id]
-        log(`  ✗ ${ep.name} (${pnl?.toFixed(1)}%)`, 'warning')
-      }
-    }
-
-    log(`Iniciando torneo con ${eligiblePrompts.length} prompts...`, 'info')
+    cancelRef.current = false
 
     const results = []
+    let consecutivePromptErrors = 0
 
-    for (let i = 0; i < eligiblePrompts.length; i++) {
-      const prompt = eligiblePrompts[i]
-      log(`[${i + 1}/${eligiblePrompts.length}] ${prompt.name}...`, 'info')
-
-      try {
-        const result = await autoBacktestPrompt(prompt, settings, log)
-
-        if (result) {
-          // Save backtest to store
-          addBacktest(result.backtestData)
-          results.push({ prompt, backtestData: result.backtestData, grade: result.grade })
-          log(`${prompt.name}: Grade ${result.grade.grade} (${result.grade.score}/100)`, 'success')
-        } else {
-          log(`${prompt.name}: Backtest fallido, saltando`, 'warning')
+    try {
+      if (excludedPrompts.length > 0) {
+        log(`Excluidos ${excludedPrompts.length} prompts con PnL < ${maxLossCutoff}%:`, 'warning')
+        for (const ep of excludedPrompts) {
+          const pnl = rankedPnlMap[ep.id]
+          log(`  ✗ ${ep.name} (${pnl?.toFixed(1)}%)`, 'warning')
         }
-      } catch (err) {
-        log(`${prompt.name}: Error — ${err.message}`, 'error')
       }
 
-      // Longer delay between prompts to respect rate limits (Groq free: 12K TPM)
-      if (i < eligiblePrompts.length - 1) {
-        log('Esperando 15s antes del siguiente prompt (rate limit)...', 'info')
-        await new Promise(r => setTimeout(r, 15000))
+      log(`Iniciando torneo con ${eligiblePrompts.length} prompts...`, 'info')
+
+      for (let i = 0; i < eligiblePrompts.length; i++) {
+        // Check for cancellation
+        if (cancelRef.current) {
+          log('Torneo cancelado por el usuario', 'warning')
+          break
+        }
+
+        const prompt = eligiblePrompts[i]
+        log(`[${i + 1}/${eligiblePrompts.length}] ${prompt.name}...`, 'info')
+
+        try {
+          const result = await autoBacktestPrompt(prompt, settings, log, { shouldCancel: () => cancelRef.current })
+
+          if (result) {
+            // Save backtest to store (wrapped in try/catch so sync errors don't break the loop)
+            try {
+              addBacktest(result.backtestData)
+            } catch (syncErr) {
+              log(`Advertencia: Error guardando backtest — ${syncErr.message}`, 'warning')
+            }
+            results.push({ prompt, backtestData: result.backtestData, grade: result.grade })
+            log(`${prompt.name}: Grade ${result.grade.grade} (${result.grade.score}/100)`, 'success')
+            consecutivePromptErrors = 0 // Reset on success
+          } else {
+            consecutivePromptErrors++
+            log(`${prompt.name}: Backtest fallido, saltando`, 'warning')
+          }
+        } catch (err) {
+          consecutivePromptErrors++
+          const isQuota = /quota|exceed|exhaust|429|rate.?limit/i.test(err.message)
+          log(`${prompt.name}: Error — ${err.message}`, 'error')
+
+          // Abort tournament if too many consecutive failures (likely quota exhausted)
+          if (consecutivePromptErrors >= 2 && isQuota) {
+            log(`Torneo abortado: ${consecutivePromptErrors} prompts consecutivos fallaron por quota/rate limit. Intenta mas tarde o cambia de proveedor AI.`, 'error')
+            break
+          }
+        }
+
+        // Check for cancellation before waiting
+        if (cancelRef.current) {
+          log('Torneo cancelado por el usuario', 'warning')
+          break
+        }
+
+        // Longer delay between prompts to respect rate limits (Groq free: 12K TPM)
+        if (i < eligiblePrompts.length - 1) {
+          log('Esperando 15s antes del siguiente prompt (rate limit)...', 'info')
+          await new Promise(r => setTimeout(r, 15000))
+        }
       }
-    }
 
-    if (results.length > 0) {
-      const rankings = tournamentRank(results)
-      setEvolutionRankings(rankings)
-      log(`Torneo completado! ${rankings[0]?.promptName || '?'} es el ganador con Grade ${rankings[0]?.grade || '?'}`, 'success')
-    } else {
-      log('Torneo sin resultados — ningun backtest fue exitoso', 'error')
+      if (results.length > 0) {
+        const rankings = tournamentRank(results)
+        setEvolutionRankings(rankings)
+        log(`Torneo completado! ${rankings[0]?.promptName || '?'} es el ganador con Grade ${rankings[0]?.grade || '?'} (${results.length}/${eligiblePrompts.length} backtests exitosos)`, 'success')
+      } else {
+        log('Torneo sin resultados — ningun backtest fue exitoso. Verifica tu API key y cuota disponible.', 'error')
+      }
+    } catch (err) {
+      log(`Error fatal en torneo: ${err.message}`, 'error')
+    } finally {
+      // ALWAYS reset status, even on unhandled errors
+      setEvolutionStatus('idle')
+      cancelRef.current = false
     }
-
-    setEvolutionStatus('idle')
   }
 
   // ─── Action: Evolve ──────────────────────────────────────────
@@ -184,6 +240,7 @@ export default function EvolutionTab() {
     }
 
     setEvolutionStatus('evolving')
+    cancelRef.current = false
     log(`Evolucionando generacion ${evolution.generation + 1}...`, 'info')
 
     const topRankings = evolution.rankings.slice(0, 3)
@@ -214,6 +271,7 @@ export default function EvolutionTab() {
       newPrompts.push(child1)
       log(`Crossover creado: ${child1.name}`, 'success')
 
+      if (cancelRef.current) { log('Evolucion cancelada', 'warning'); return }
       await new Promise(r => setTimeout(r, 2000))
 
       // 2. Mutation
@@ -229,6 +287,7 @@ export default function EvolutionTab() {
       newPrompts.push(child2)
       log(`Mutacion creada: ${child2.name}`, 'success')
 
+      if (cancelRef.current) { log('Evolucion cancelada', 'warning'); return }
       await new Promise(r => setTimeout(r, 2000))
 
       // 3. Innovation
@@ -248,9 +307,10 @@ export default function EvolutionTab() {
 
     } catch (err) {
       log(`Error en evolucion: ${err.message}`, 'error')
+    } finally {
+      setEvolutionStatus('idle')
+      cancelRef.current = false
     }
-
-    setEvolutionStatus('idle')
   }
 
   // ─── Action: Feed Data ───────────────────────────────────────
@@ -265,9 +325,9 @@ export default function EvolutionTab() {
       log('Datos de mercado actualizados. Seran usados en la proxima evolucion.', 'success')
     } catch (err) {
       log(`Error: ${err.message}`, 'error')
+    } finally {
+      setEvolutionStatus('idle')
     }
-
-    setEvolutionStatus('idle')
   }
 
   // ─── Render ──────────────────────────────────────────────────
@@ -398,6 +458,31 @@ export default function EvolutionTab() {
           </div>
         </button>
       </div>
+
+      {/* Cancel Button — shown when any operation is running */}
+      {isRunning && (
+        <button
+          onClick={handleCancel}
+          disabled={isCancelling}
+          className={`w-full py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+            isCancelling
+              ? 'bg-quant-surface border border-quant-border text-gray-500 cursor-not-allowed'
+              : 'bg-accent-red/10 border border-accent-red/40 text-accent-red hover:bg-accent-red/20 active:scale-[0.98]'
+          }`}
+        >
+          {isCancelling ? (
+            <>
+              <Loader2 size={14} className="animate-spin" />
+              Cancelando...
+            </>
+          ) : (
+            <>
+              <Trash2 size={14} />
+              Cancelar {evolution.status === 'backtesting' ? 'Torneo' : evolution.status === 'importing' ? 'Importacion' : evolution.status === 'evolving' ? 'Evolucion' : 'Operacion'}
+            </>
+          )}
+        </button>
+      )}
 
       {/* Tournament Config Panel */}
       <AnimatePresence>

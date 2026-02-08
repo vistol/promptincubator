@@ -96,9 +96,10 @@ const DEFAULT_TAKER_FEE = 0.001 // 0.1%
  * @param {Object} prompt - Prompt object from store
  * @param {Object} settings - App settings (with apiKeys)
  * @param {Function} onLog - Callback for log messages: (message, type) => void
+ * @param {Object} options - Optional: { shouldCancel: () => boolean }
  * @returns {Object} { backtestData, grade } or null on failure
  */
-export const autoBacktestPrompt = async (prompt, settings, onLog = () => {}) => {
+export const autoBacktestPrompt = async (prompt, settings, onLog = () => {}, options = {}) => {
   try {
     onLog(`Backtesting: ${prompt.name}...`, 'info')
 
@@ -132,8 +133,21 @@ export const autoBacktestPrompt = async (prompt, settings, onLog = () => {}) => 
     const allTrades = []
     const sampleBoundaries = []
     let runsCompleted = 0
+    let consecutiveErrors = 0
+    const MAX_CONSECUTIVE_ERRORS = 3 // Abort prompt if 3 samples fail in a row
 
     for (let i = 0; i < sampleTimes.length; i++) {
+      // Check for cancellation
+      if (options.shouldCancel?.()) {
+        onLog(`${prompt.name}: Cancelado`, 'warning')
+        break
+      }
+
+      // Early abort if too many consecutive errors (likely quota/rate limit exhausted)
+      if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        onLog(`${prompt.name}: ${consecutiveErrors} errores consecutivos — abortando (posible quota agotada)`, 'error')
+        break
+      }
       const sampleTime = sampleTimes[i]
       const sampleEnd = i < sampleTimes.length - 1 ? sampleTimes[i + 1] : endTime
 
@@ -148,7 +162,7 @@ export const autoBacktestPrompt = async (prompt, settings, onLog = () => {}) => 
           continue
         }
 
-        // Generate trades using AI with historical prices (with rate limit retry)
+        // Generate trades using AI with historical prices (with rate limit/quota retry)
         let trades = null
         const MAX_SAMPLE_RETRIES = 2
         for (let attempt = 0; attempt <= MAX_SAMPLE_RETRIES; attempt++) {
@@ -160,12 +174,13 @@ export const autoBacktestPrompt = async (prompt, settings, onLog = () => {}) => 
               null,
               pricesAtTime
             )
+            consecutiveErrors = 0 // Reset on success
             break // Success
           } catch (apiErr) {
-            const isRateLimit = /rate.?limit|429|too many|tokens per minute|TPM|RPM/i.test(apiErr.message)
+            const isRateLimit = /rate.?limit|429|too many|tokens per minute|TPM|RPM|quota.?exceed|quota.?has been|resource.?exhaust/i.test(apiErr.message)
             if (isRateLimit && attempt < MAX_SAMPLE_RETRIES) {
-              const waitSec = 10 * (attempt + 1) // 10s, 20s
-              onLog(`Muestra ${i + 1}: Rate limit, esperando ${waitSec}s... (intento ${attempt + 1}/${MAX_SAMPLE_RETRIES + 1})`, 'warning')
+              const waitSec = 15 * (attempt + 1) // 15s, 30s
+              onLog(`Muestra ${i + 1}: Rate limit/quota, esperando ${waitSec}s... (intento ${attempt + 1}/${MAX_SAMPLE_RETRIES + 1})`, 'warning')
               await new Promise(r => setTimeout(r, waitSec * 1000))
             } else {
               throw apiErr // Re-throw if not rate limit or exhausted retries
@@ -189,7 +204,14 @@ export const autoBacktestPrompt = async (prompt, settings, onLog = () => {}) => 
           onLog(`Muestra ${i + 1}: AI no genero trades`, 'warning')
         }
       } catch (err) {
-        onLog(`Muestra ${i + 1}: Error — ${err.message}`, 'error')
+        consecutiveErrors++
+        const isQuota = /quota|exceed|exhaust/i.test(err.message)
+        onLog(`Muestra ${i + 1}: Error — ${err.message}${isQuota ? ' (quota agotada)' : ''}`, 'error')
+        // If quota error, skip remaining samples for this prompt
+        if (isQuota && consecutiveErrors >= 2) {
+          onLog(`${prompt.name}: Quota agotada, saltando muestras restantes`, 'warning')
+          break
+        }
       }
 
       // Longer delay between samples to avoid rate limiting (8s for free tier Groq)
