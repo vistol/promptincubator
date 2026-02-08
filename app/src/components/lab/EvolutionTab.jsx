@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import useStore from '../../store/useStore'
 import { autoBacktestPrompt, tournamentRank } from '../../lib/autoBacktest'
-import { fetchFreqtradeStrategies, fetchAllFuturesData, formatMarketDataForLLM } from '../../lib/strategyImporter'
+import { fetchFreqtradeStrategies, fetchPineScriptStrategies, fetchAllFuturesData, formatMarketDataForLLM } from '../../lib/strategyImporter'
 import { crossover, mutate, innovate } from '../../lib/evolutionEngine'
 
 export default function EvolutionTab() {
@@ -50,22 +50,41 @@ export default function EvolutionTab() {
     if (isRunning) return
     setEvolutionStatus('importing')
     clearEvolutionLog()
-    log('Iniciando importacion de estrategias externas...', 'info')
+    log('Iniciando importacion de estrategias externas (Freqtrade + PineScript)...', 'info')
+
+    const allNewPrompts = []
 
     try {
-      const newPrompts = await fetchFreqtradeStrategies(settings, log)
-
-      if (newPrompts.length === 0) {
-        log('No se pudieron importar estrategias', 'warning')
-      } else {
-        for (const p of newPrompts) {
-          addPrompt(p)
-          addImportedStrategy({ source: 'github', name: p.name, content: p.content.slice(0, 200) })
-        }
-        log(`${newPrompts.length} estrategias importadas exitosamente`, 'success')
-      }
+      // Source 1: Freqtrade (Python)
+      log('─── Fuente 1: Freqtrade (Python) ───', 'info')
+      const ftPrompts = await fetchFreqtradeStrategies(settings, log)
+      allNewPrompts.push(...ftPrompts)
     } catch (err) {
-      log(`Error: ${err.message}`, 'error')
+      log(`Error Freqtrade: ${err.message}`, 'error')
+    }
+
+    try {
+      // Source 2: PineScript/TradingView
+      log('─── Fuente 2: PineScript (TradingView) ───', 'info')
+      const psPrompts = await fetchPineScriptStrategies(settings, log)
+      allNewPrompts.push(...psPrompts)
+    } catch (err) {
+      log(`Error PineScript: ${err.message}`, 'error')
+    }
+
+    if (allNewPrompts.length === 0) {
+      log('No se pudieron importar estrategias de ninguna fuente', 'warning')
+    } else {
+      for (const p of allNewPrompts) {
+        addPrompt(p)
+        addImportedStrategy({
+          source: p.source || 'github',
+          name: p.name,
+          content: p.content.slice(0, 200),
+          qualityScore: p.qualityScore
+        })
+      }
+      log(`Total: ${allNewPrompts.length} estrategias importadas (calidad promedio: ${Math.round(allNewPrompts.reduce((s, p) => s + (p.qualityScore || 0), 0) / allNewPrompts.length)}%)`, 'success')
     }
 
     setEvolutionStatus('idle')
@@ -275,7 +294,7 @@ export default function EvolutionTab() {
           )}
           <div className="text-left">
             <span className="text-xs font-bold block">Importar</span>
-            <span className="text-[10px] text-gray-500">GitHub + Freqtrade</span>
+            <span className="text-[10px] text-gray-500">Freqtrade + PineScript</span>
           </div>
         </button>
 
@@ -353,7 +372,7 @@ export default function EvolutionTab() {
           <div className="space-y-1.5 text-[10px] text-gray-500">
             <div className="flex items-start gap-2">
               <Sprout size={10} className="text-accent-green mt-0.5 shrink-0" />
-              <span><strong className="text-gray-400">Importar:</strong> Trae estrategias de GitHub (Freqtrade) y las convierte en prompts</span>
+              <span><strong className="text-gray-400">Importar:</strong> Trae estrategias de GitHub (Freqtrade + PineScript), las analiza con regex y las convierte en prompts tecnicos via LLM (2 fases + validacion)</span>
             </div>
             <div className="flex items-start gap-2">
               <Trophy size={10} className="text-accent-yellow mt-0.5 shrink-0" />
