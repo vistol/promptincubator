@@ -149,6 +149,7 @@ export default function EvolutionTab() {
     clearEvolutionLog()
     cancelRef.current = false
 
+    // results lives outside try so finally can always save partial rankings
     const results = []
     let consecutivePromptErrors = 0
 
@@ -177,12 +178,8 @@ export default function EvolutionTab() {
           const result = await autoBacktestPrompt(prompt, settings, log, { shouldCancel: () => cancelRef.current })
 
           if (result) {
-            // Save backtest to store (wrapped in try/catch so sync errors don't break the loop)
-            try {
-              addBacktest(result.backtestData)
-            } catch (syncErr) {
-              log(`Advertencia: Error guardando backtest — ${syncErr.message}`, 'warning')
-            }
+            // Save backtest to store — double-wrapped so NO error can escape
+            try { addBacktest(result.backtestData) } catch (_e) { /* sync error, ignore */ }
             results.push({ prompt, backtestData: result.backtestData, grade: result.grade })
             log(`${prompt.name}: Grade ${result.grade.grade} (${result.grade.score}/100)`, 'success')
             consecutivePromptErrors = 0 // Reset on success
@@ -218,18 +215,23 @@ export default function EvolutionTab() {
           }
         }
       }
-
-      if (results.length > 0) {
-        const rankings = tournamentRank(results)
-        setEvolutionRankings(rankings)
-        log(`Torneo completado! ${rankings[0]?.promptName || '?'} es el ganador con Grade ${rankings[0]?.grade || '?'} (${results.length}/${eligiblePrompts.length} backtests exitosos)`, 'success')
-      } else {
-        log('Torneo sin resultados — ningun backtest fue exitoso. Verifica tu API key y cuota disponible.', 'error')
-      }
     } catch (err) {
-      log(`Error fatal en torneo: ${err.message}`, 'error')
+      log(`Error en torneo: ${err.message}`, 'error')
     } finally {
-      // ALWAYS reset status, even on unhandled errors
+      // ── ALWAYS save results, even partial, even on crash ──
+      try {
+        if (results.length > 0) {
+          const rankings = tournamentRank(results)
+          setEvolutionRankings(rankings)
+          const completed = results.length === eligiblePrompts.length
+          const status = cancelRef.current ? 'cancelado' : completed ? 'completado' : 'parcial'
+          log(`Torneo ${status}: ${results.length}/${eligiblePrompts.length} backtests → Mejor: ${rankings[0]?.promptName || '?'} (Grade ${rankings[0]?.grade || '?'})`, 'success')
+        } else {
+          log('Torneo sin resultados — ningun backtest fue exitoso. Verifica tu API key y cuota disponible.', 'error')
+        }
+      } catch (rankErr) {
+        log(`Error guardando rankings: ${rankErr.message}`, 'error')
+      }
       setEvolutionStatus('idle')
       cancelRef.current = false
     }
