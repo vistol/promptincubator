@@ -7,7 +7,7 @@ import {
   Info, Clock, Trash2
 } from 'lucide-react'
 import useStore from '../../store/useStore'
-import { autoBacktestPrompt, tournamentRank } from '../../lib/autoBacktest'
+import { autoBacktestPrompt, tournamentRank, cancellableSleep } from '../../lib/autoBacktest'
 import { fetchFreqtradeStrategies, fetchPineScriptStrategies, fetchAllFuturesData, formatMarketDataForLLM } from '../../lib/strategyImporter'
 import { crossover, mutate, innovate } from '../../lib/evolutionEngine'
 
@@ -211,7 +211,11 @@ export default function EvolutionTab() {
         // Longer delay between prompts to respect rate limits (Groq free: 12K TPM)
         if (i < eligiblePrompts.length - 1) {
           log('Esperando 15s antes del siguiente prompt (rate limit)...', 'info')
-          await new Promise(r => setTimeout(r, 15000))
+          const cancelled = await cancellableSleep(15000, () => cancelRef.current)
+          if (cancelled) {
+            log('Torneo cancelado por el usuario', 'warning')
+            break
+          }
         }
       }
 
@@ -272,7 +276,8 @@ export default function EvolutionTab() {
       log(`Crossover creado: ${child1.name}`, 'success')
 
       if (cancelRef.current) { log('Evolucion cancelada', 'warning'); return }
-      await new Promise(r => setTimeout(r, 2000))
+      await cancellableSleep(2000, () => cancelRef.current)
+      if (cancelRef.current) { log('Evolucion cancelada', 'warning'); return }
 
       // 2. Mutation
       log('Mutando mejor prompt...', 'info')
@@ -288,7 +293,8 @@ export default function EvolutionTab() {
       log(`Mutacion creada: ${child2.name}`, 'success')
 
       if (cancelRef.current) { log('Evolucion cancelada', 'warning'); return }
-      await new Promise(r => setTimeout(r, 2000))
+      await cancellableSleep(2000, () => cancelRef.current)
+      if (cancelRef.current) { log('Evolucion cancelada', 'warning'); return }
 
       // 3. Innovation
       log('Generando innovacion con datos de mercado...', 'info')

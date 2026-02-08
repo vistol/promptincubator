@@ -82,6 +82,27 @@ export const calculateBacktestGrade = (result) => {
   return { grade, color, bgColor, score, verdict }
 }
 
+// ─── Cancellable Sleep ───────────────────────────────────────────
+
+/**
+ * Sleep that can be interrupted instantly via shouldCancel callback.
+ * Polls every 500ms instead of blocking for the full duration.
+ * @param {number} ms - Total milliseconds to wait
+ * @param {Function} shouldCancel - Returns true to abort sleep immediately
+ * @returns {boolean} true if cancelled, false if completed normally
+ */
+export const cancellableSleep = async (ms, shouldCancel) => {
+  const interval = 500 // Check every 500ms
+  let elapsed = 0
+  while (elapsed < ms) {
+    if (shouldCancel?.()) return true
+    const chunk = Math.min(interval, ms - elapsed)
+    await new Promise(r => setTimeout(r, chunk))
+    elapsed += chunk
+  }
+  return false
+}
+
 // ─── Auto Backtest Pipeline ──────────────────────────────────────
 
 const DEFAULT_ASSETS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT']
@@ -181,7 +202,8 @@ export const autoBacktestPrompt = async (prompt, settings, onLog = () => {}, opt
             if (isRateLimit && attempt < MAX_SAMPLE_RETRIES) {
               const waitSec = 15 * (attempt + 1) // 15s, 30s
               onLog(`Muestra ${i + 1}: Rate limit/quota, esperando ${waitSec}s... (intento ${attempt + 1}/${MAX_SAMPLE_RETRIES + 1})`, 'warning')
-              await new Promise(r => setTimeout(r, waitSec * 1000))
+              const wasCancelled = await cancellableSleep(waitSec * 1000, options.shouldCancel)
+              if (wasCancelled) throw new Error('Cancelado por el usuario')
             } else {
               throw apiErr // Re-throw if not rate limit or exhausted retries
             }
@@ -218,7 +240,11 @@ export const autoBacktestPrompt = async (prompt, settings, onLog = () => {}, opt
       if (i < sampleTimes.length - 1) {
         const delaySec = 8
         onLog(`Esperando ${delaySec}s antes de muestra ${i + 2}...`, 'info')
-        await new Promise(r => setTimeout(r, delaySec * 1000))
+        const wasCancelled = await cancellableSleep(delaySec * 1000, options.shouldCancel)
+        if (wasCancelled) {
+          onLog(`${prompt.name}: Cancelado`, 'warning')
+          break
+        }
       }
     }
 
