@@ -28,10 +28,35 @@ export default function EvolutionTab() {
 
   const [showHistory, setShowHistory] = useState(false)
   const [showLog, setShowLog] = useState(true)
+  const [showTournamentConfig, setShowTournamentConfig] = useState(false)
+  const [maxLossCutoff, setMaxLossCutoff] = useState(-10) // Exclude prompts with PnL worse than this
   const logEndRef = useRef(null)
 
   const activePrompts = prompts.filter(p => p.status === 'active')
   const isRunning = evolution.status !== 'idle'
+
+  // ─── Tournament filtering: exclude already-ranked losers ─────
+  // Build a map of promptId → worst PnL from previous rankings
+  const rankedPnlMap = {}
+  for (const r of evolution.rankings) {
+    rankedPnlMap[r.promptId] = r.pnl
+  }
+  // Also check history for past rankings
+  for (const gen of evolution.history) {
+    for (const r of gen.rankings) {
+      if (rankedPnlMap[r.promptId] === undefined || r.pnl < rankedPnlMap[r.promptId]) {
+        rankedPnlMap[r.promptId] = r.pnl
+      }
+    }
+  }
+
+  // Split prompts into eligible and excluded
+  const excludedPrompts = activePrompts.filter(p => {
+    const prevPnl = rankedPnlMap[p.id]
+    return prevPnl !== undefined && prevPnl < maxLossCutoff
+  })
+  const eligiblePrompts = activePrompts.filter(p => !excludedPrompts.includes(p))
+  const hasExcluded = excludedPrompts.length > 0
 
   // Auto-scroll log
   useEffect(() => {
@@ -93,20 +118,29 @@ export default function EvolutionTab() {
   // ─── Action: Tournament ──────────────────────────────────────
   const handleTournament = async () => {
     if (isRunning) return
-    if (activePrompts.length === 0) {
-      log('No hay prompts activos para el torneo', 'error')
+    if (eligiblePrompts.length === 0) {
+      log('No hay prompts elegibles para el torneo', 'error')
       return
     }
 
     setEvolutionStatus('backtesting')
     clearEvolutionLog()
-    log(`Iniciando torneo con ${activePrompts.length} prompts...`, 'info')
+
+    if (excludedPrompts.length > 0) {
+      log(`Excluidos ${excludedPrompts.length} prompts con PnL < ${maxLossCutoff}%:`, 'warning')
+      for (const ep of excludedPrompts) {
+        const pnl = rankedPnlMap[ep.id]
+        log(`  ✗ ${ep.name} (${pnl?.toFixed(1)}%)`, 'warning')
+      }
+    }
+
+    log(`Iniciando torneo con ${eligiblePrompts.length} prompts...`, 'info')
 
     const results = []
 
-    for (let i = 0; i < activePrompts.length; i++) {
-      const prompt = activePrompts[i]
-      log(`[${i + 1}/${activePrompts.length}] ${prompt.name}...`, 'info')
+    for (let i = 0; i < eligiblePrompts.length; i++) {
+      const prompt = eligiblePrompts[i]
+      log(`[${i + 1}/${eligiblePrompts.length}] ${prompt.name}...`, 'info')
 
       try {
         const result = await autoBacktestPrompt(prompt, settings, log)
@@ -124,7 +158,7 @@ export default function EvolutionTab() {
       }
 
       // Longer delay between prompts to respect rate limits (Groq free: 12K TPM)
-      if (i < activePrompts.length - 1) {
+      if (i < eligiblePrompts.length - 1) {
         log('Esperando 15s antes del siguiente prompt (rate limit)...', 'info')
         await new Promise(r => setTimeout(r, 15000))
       }
@@ -300,10 +334,10 @@ export default function EvolutionTab() {
 
         {/* Tournament */}
         <button
-          onClick={handleTournament}
-          disabled={isRunning || activePrompts.length === 0}
+          onClick={() => setShowTournamentConfig(!showTournamentConfig)}
+          disabled={isRunning}
           className={`flex items-center gap-2 p-3 rounded-xl border transition-all ${
-            isRunning || activePrompts.length === 0
+            isRunning
               ? 'bg-quant-surface border-quant-border text-gray-500 cursor-not-allowed'
               : 'bg-quant-card border-accent-yellow/30 hover:border-accent-yellow/60 text-white active:scale-95'
           }`}
@@ -315,7 +349,10 @@ export default function EvolutionTab() {
           )}
           <div className="text-left">
             <span className="text-xs font-bold block">Torneo</span>
-            <span className="text-[10px] text-gray-500">{activePrompts.length} prompts</span>
+            <span className="text-[10px] text-gray-500">
+              {eligiblePrompts.length} de {activePrompts.length}
+              {hasExcluded && <span className="text-accent-red ml-1">({excludedPrompts.length} excl.)</span>}
+            </span>
           </div>
         </button>
 
@@ -361,6 +398,115 @@ export default function EvolutionTab() {
           </div>
         </button>
       </div>
+
+      {/* Tournament Config Panel */}
+      <AnimatePresence>
+        {showTournamentConfig && !isRunning && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="bg-quant-card border border-accent-yellow/30 rounded-xl p-3 space-y-3">
+              <h3 className="text-xs font-bold text-accent-yellow flex items-center gap-1.5">
+                <Trophy size={12} />
+                Configurar Torneo
+              </h3>
+
+              {/* Loss cutoff slider */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] text-gray-400">Excluir prompts con PnL peor que:</span>
+                  <span className="text-xs font-bold font-mono text-accent-red">{maxLossCutoff}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={-50}
+                  max={0}
+                  step={5}
+                  value={maxLossCutoff}
+                  onChange={(e) => setMaxLossCutoff(parseInt(e.target.value))}
+                  className="w-full h-1.5 rounded-full appearance-none bg-quant-surface cursor-pointer accent-accent-yellow"
+                />
+                <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
+                  <span>-50%</span>
+                  <span>-25%</span>
+                  <span>0%</span>
+                </div>
+              </div>
+
+              {/* Prompt list summary */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="text-gray-400">Prompts activos</span>
+                  <span className="text-white font-mono">{activePrompts.length}</span>
+                </div>
+                {hasExcluded && (
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-accent-red">Excluidos (PnL &lt; {maxLossCutoff}%)</span>
+                    <span className="text-accent-red font-mono">-{excludedPrompts.length}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between text-[10px] border-t border-quant-border pt-1">
+                  <span className="text-accent-yellow font-bold">Competiran en torneo</span>
+                  <span className="text-accent-yellow font-bold font-mono">{eligiblePrompts.length}</span>
+                </div>
+              </div>
+
+              {/* Excluded list */}
+              {hasExcluded && (
+                <div className="space-y-0.5">
+                  {excludedPrompts.map(ep => (
+                    <div key={ep.id} className="flex items-center gap-1.5 text-[10px] text-gray-500">
+                      <span className="text-accent-red">✗</span>
+                      <span className="truncate flex-1">{ep.name}</span>
+                      <span className="text-accent-red font-mono">{rankedPnlMap[ep.id]?.toFixed(1)}%</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Eligible list */}
+              {eligiblePrompts.length > 0 && (
+                <div className="space-y-0.5">
+                  {eligiblePrompts.map(ep => {
+                    const prevPnl = rankedPnlMap[ep.id]
+                    const isNew = prevPnl === undefined
+                    return (
+                      <div key={ep.id} className="flex items-center gap-1.5 text-[10px] text-gray-400">
+                        <span className="text-accent-green">✓</span>
+                        <span className="truncate flex-1">{ep.name}</span>
+                        {isNew ? (
+                          <span className="text-accent-cyan font-mono">nuevo</span>
+                        ) : (
+                          <span className={`font-mono ${prevPnl >= 0 ? 'text-accent-green' : 'text-accent-red'}`}>
+                            {prevPnl >= 0 ? '+' : ''}{prevPnl?.toFixed(1)}%
+                          </span>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Launch button */}
+              <button
+                onClick={() => { setShowTournamentConfig(false); handleTournament() }}
+                disabled={eligiblePrompts.length === 0}
+                className={`w-full py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                  eligiblePrompts.length === 0
+                    ? 'bg-quant-surface text-gray-500 cursor-not-allowed'
+                    : 'bg-accent-yellow/20 border border-accent-yellow/40 text-accent-yellow hover:bg-accent-yellow/30 active:scale-[0.98]'
+                }`}
+              >
+                <Play size={14} />
+                Iniciar Torneo ({eligiblePrompts.length} prompts)
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* How it works (compact) */}
       {evolution.generation === 0 && evolution.rankings.length === 0 && (
